@@ -2,37 +2,68 @@
 // lazo (seleziona / sposta / ridimensiona), caselle di testo da tastiera e immagini.
 // Le coordinate sono normalizzate (0..1) così il disegno si adatta a zoom e schermi diversi.
 
-import { h, toast } from './ui.js';
+import { h, toast, popMenu } from './ui.js';
 import { icon } from './icons.js';
 import { uid } from './util.js';
 
 export const PEN_COLORS = ['#1f1f1f', '#1a5fd0', '#d13438', '#107c41', '#7a3fd1', '#e8730c'];
 export const HL_COLORS = ['#ffe14d', '#8ef08e', '#8fd9ff', '#ffa3d7', '#ffbe73'];
-const RANGES = { pen: [0.8, 12, 0.1], highlighter: [6, 40, 1], eraser: [6, 60, 1], text: [10, 48, 1] };
 const LS = 'pfy-tools';
 
+// ---------- Spessori a tappe fisse ----------
+// Internamente lo spessore è in millesimi della larghezza della pagina; una pagina A4 è larga 210 mm.
+const MM = 1000 / 210, PT = 0.3528 * MM;
+const num = x => String(x).replace('.', ',');
+const steps = (list, k) => list.map(x => ({ w: Math.round(x * k * 1000) / 1000, label: num(x) }));
+export const SIZES = {
+  pen: steps([0.2, 0.3, 0.5, 0.7, 1, 1.5, 2], MM),
+  highlighter: steps([2, 3, 4, 6, 8], MM),
+  text: steps([8, 10, 12, 14, 18, 24], PT),
+  eraser: [{ w: 2 * MM, label: 'S', name: 'Piccola' }, { w: 5 * MM, label: 'M', name: 'Media' }, { w: 10 * MM, label: 'L', name: 'Grande' }],
+};
+const UNIT = { pen: 'mm', highlighter: 'mm', text: 'pt' };
+const nearest = (list, w) => list.reduce((b, s, i) => (Math.abs(s.w - w) < Math.abs(list[b].w - w) ? i : b), 0);
+
+// ---------- Tipi di penna ----------
+export const PEN_STYLES = [
+  ['fountain', 'Stilografica'],
+  ['ball', 'A sfera'],
+  ['fine', 'Sottile (fineliner)'],
+  ['pencil', 'Matita'],
+  ['brush', 'Pennello'],
+];
+
 export const emptyInk = () => ({ strokes: [], texts: [], images: [] });
+const sid = () => uid().replace(/-/g, '').slice(0, 10);
 
 // Stato condiviso degli strumenti (uguale in tutta l'app, come in Noteful)
 export const tools = {
   tool: 'pen',
+  penStyle: 'ball',
+  eraserMode: 'stroke',          // 'stroke' = cancella il tratto intero, 'partial' = solo la parte toccata
   colors: { pen: '#1f1f1f', highlighter: '#ffe14d' },
-  widths: { pen: 2.4, highlighter: 16, eraser: 16, text: 18 },
+  widths: { pen: SIZES.pen[2].w, highlighter: SIZES.highlighter[1].w, eraser: SIZES.eraser[1].w, text: SIZES.text[2].w },
   penOnly: false,
   penSeen: false,
   _l: new Set(),
   load() {
     try {
       const s = JSON.parse(localStorage.getItem(LS) || '{}');
-      for (const k of ['tool', 'penOnly', 'penSeen']) if (k in s) this[k] = s[k];
+      for (const k of ['tool', 'penStyle', 'eraserMode', 'penOnly', 'penSeen']) if (k in s) this[k] = s[k];
       if (s.colors) Object.assign(this.colors, s.colors);
       if (s.widths) Object.assign(this.widths, s.widths);
     } catch { /* nessun salvataggio */ }
+    // riporta gli spessori salvati con la vecchia barra alla tappa più vicina
+    for (const k in SIZES) this.widths[k] = SIZES[k][nearest(SIZES[k], this.widths[k])].w;
     document.documentElement.classList.toggle('pen-only', !!this.penOnly);
   },
   set(p) {
     Object.assign(this, p);
-    try { localStorage.setItem(LS, JSON.stringify({ tool: this.tool, colors: this.colors, widths: this.widths, penOnly: this.penOnly, penSeen: this.penSeen })); } catch { /* ignore */ }
+    try {
+      localStorage.setItem(LS, JSON.stringify({
+        tool: this.tool, penStyle: this.penStyle, eraserMode: this.eraserMode, colors: this.colors, widths: this.widths, penOnly: this.penOnly, penSeen: this.penSeen,
+      }));
+    } catch { /* ignore */ }
     document.documentElement.classList.toggle('pen-only', !!this.penOnly);
     this._l.forEach(f => f());
   },
@@ -40,45 +71,184 @@ export const tools = {
 };
 tools.load();
 
+// ---------- Tema chiaro / scuro ----------
+const darkMQ = matchMedia('(prefers-color-scheme: dark)');
+export function isDarkTheme() {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === 'dark' : darkMQ.matches;
+}
+const themeL = new Set();
+export const onTheme = f => { themeL.add(f); return () => themeL.delete(f); };
+const fireTheme = () => themeL.forEach(f => { try { f(); } catch (e) { console.warn(e); } });
+if (darkMQ.addEventListener) darkMQ.addEventListener('change', fireTheme); else if (darkMQ.addListener) darkMQ.addListener(fireTheme);
+addEventListener('pfy-theme', fireTheme);
+
+// Come in OneNote: il colore salvato è sempre quello "chiaro"; nel tema scuro viene mostrato
+// con la luminosità invertita (il nero diventa bianco) e i colori diventano più accesi.
+// La trasformazione è reversibile, così un colore scelto nel tema scuro si salva correttamente.
+const GAMMA = 1.45, SAT = 1.12;
+function hexToHsl(hex) {
+  let x = String(hex).replace('#', '');
+  if (x.length === 3) x = x.split('').map(c => c + c).join('');
+  const n = parseInt(x.slice(0, 6), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  if (!d) return [0, 0, l];
+  const s = d / (1 - Math.abs(2 * l - 1));
+  let hh = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  hh *= 60; if (hh < 0) hh += 360;
+  return [hh, s, l];
+}
+function hslToHex(hh, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((hh / 60) % 2) - 1)), m = l - c / 2;
+  const [r, g, b] = hh < 60 ? [c, x, 0] : hh < 120 ? [x, c, 0] : hh < 180 ? [0, c, x] : hh < 240 ? [0, x, c] : hh < 300 ? [x, 0, c] : [c, 0, x];
+  const to = v => Math.round(Math.min(1, Math.max(0, v + m)) * 255).toString(16).padStart(2, '0');
+  return '#' + to(r) + to(g) + to(b);
+}
+// Nuova luminosità nel tema scuro. I grigi si invertono (nero ↔ bianco); i colori vivaci
+// restano su una luminosità media, così diventano più accesi invece che pallidi.
+function darkL(l, s) {
+  const w = (1 - s) * (1 - s);
+  return w * (1 - Math.pow(l, GAMMA)) + (1 - w) * (0.7 - 0.16 * l);
+}
+const darkCache = new Map();
+export function inkColor(c, dark) {
+  if (!dark || typeof c !== 'string' || c[0] !== '#') return c;
+  let v = darkCache.get(c);
+  if (!v) {
+    const [hh, s, l] = hexToHsl(c);
+    v = hslToHex(hh, Math.min(1, s * SAT), darkL(l, s));
+    darkCache.set(c, v);
+  }
+  return v;
+}
+// Colore scelto mentre si vede il tema scuro → colore da salvare (inverso di inkColor)
+export function inkColorFromDark(c) {
+  const [hh, s2, l2] = hexToHsl(c);
+  const s = Math.min(1, s2 / SAT);
+  let lo = 0, hi = 1;   // darkL scende al crescere di l: ricerca per bisezione
+  for (let i = 0; i < 30; i++) { const m = (lo + hi) / 2; if (darkL(m, s) > l2) lo = m; else hi = m; }
+  return hslToHex(hh, s, (lo + hi) / 2);
+}
+
 const R5 = v => Math.round(v * 1e5) / 1e5;
 
-// Disegna un tratto. p = [x, y, pressione, x, y, pressione, ...] normalizzati
-export function drawStroke(ctx, s, W, H) {
+// ---------- Disegno dei tratti ----------
+// Spessore di ogni pezzetto del tratto in base al tipo di penna
+const NIB = -Math.PI / 4;   // pennino della stilografica inclinato a 45°
+function widthFn(kind, base, n) {
+  if (kind === 'fine') return () => Math.max(0.5, base);
+  if (kind === 'ball' || kind === 'pencil') return (i, pr) => Math.max(0.5, base * (0.8 + 0.4 * pr));
+  if (kind === 'brush') {
+    return (i, pr) => {
+      const tap = Math.min(1, (i + 1) / 5, (n - i) / 5);
+      return Math.max(0.5, base * (0.25 + 1.9 * pr) * (0.3 + 0.7 * tap));
+    };
+  }
+  if (kind === 'fountain') {
+    let f = -1;
+    return (i, pr, ang) => {
+      const t = 0.28 + 0.72 * Math.abs(Math.sin(ang - NIB));
+      f = f < 0 ? t : f * 0.55 + t * 0.45;
+      return Math.max(0.5, base * 1.5 * f * (0.75 + 0.5 * pr));
+    };
+  }
+  return (i, pr) => Math.max(0.6, base * (0.35 + pr * 1.1));   // tratti creati prima dei tipi di penna
+}
+function traceStroke(ctx, p, W, H, widthAt) {
+  const n = p.length / 3;
+  if (n === 1) {
+    ctx.beginPath();
+    ctx.arc(p[0] * W, p[1] * H, widthAt(0, p[2], 0) / 2, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  let px = p[0] * W, py = p[1] * H, mx = px, my = py;
+  for (let i = 3; i < p.length; i += 3) {
+    const x = p[i] * W, y = p[i + 1] * H;
+    const nx = (px + x) / 2, ny = (py + y) / 2;
+    ctx.beginPath();
+    ctx.moveTo(mx, my);
+    ctx.quadraticCurveTo(px, py, nx, ny);
+    ctx.lineWidth = widthAt(i / 3, p[i + 2], Math.atan2(y - py, x - px));
+    ctx.stroke();
+    mx = nx; my = ny; px = x; py = y;
+  }
+  ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(px, py); ctx.stroke();
+}
+
+// Grana della matita: puntini trasparenti sempre uguali, ancorati alla pagina
+let grain = null;
+function grainCanvas() {
+  if (grain) return grain;
+  const S = 96, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d'), img = g.createImageData(S, S);
+  let seed = 7919;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (let i = 3; i < img.data.length; i += 4) img.data[i] = rnd() < 0.42 ? Math.round(70 + 185 * rnd()) : 0;
+  g.putImageData(img, 0, 0);
+  return (grain = c);
+}
+function drawPencil(ctx, s, W, H, base, color) {
+  const p = s.p;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < p.length; i += 3) {
+    const x = p[i] * W, y = p[i + 1] * H;
+    if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y;
+  }
+  const pad = base * 1.3 + 2;
+  x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+  const sc = ctx.getTransform ? ctx.getTransform().a || 1 : 1;
+  const cw = Math.max(1, Math.ceil((x1 - x0) * sc)), ch = Math.max(1, Math.ceil((y1 - y0) * sc));
+  const widthAt = widthFn('pencil', base, p.length / 3);
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = ctx.fillStyle = color;
+  if (cw * ch > 16e6) { ctx.globalAlpha = 0.75; traceStroke(ctx, p, W, H, widthAt); ctx.restore(); return; }
+  const off = document.createElement('canvas');
+  off.width = cw; off.height = ch;
+  const o = off.getContext('2d');
+  o.setTransform(sc, 0, 0, sc, -x0 * sc, -y0 * sc);
+  o.lineCap = 'round'; o.lineJoin = 'round'; o.strokeStyle = o.fillStyle = color;
+  traceStroke(o, p, W, H, widthAt);
+  o.setTransform(1, 0, 0, 1, 0, 0);
+  o.globalCompositeOperation = 'destination-out';
+  const pat = o.createPattern(grainCanvas(), 'repeat');
+  if (pat.setTransform && typeof DOMMatrix !== 'undefined') pat.setTransform(new DOMMatrix([1, 0, 0, 1, -x0 * sc, -y0 * sc]));
+  o.fillStyle = pat;
+  o.fillRect(0, 0, cw, ch);
+  ctx.globalAlpha = 0.9;
+  ctx.drawImage(off, x0, y0, cw / sc, ch / sc);
+  ctx.restore();
+}
+
+// Disegna un tratto. p = [x, y, pressione, x, y, pressione, ...] normalizzati.
+// dark = la superficie è mostrata nel tema scuro (i colori vengono adattati).
+export function drawStroke(ctx, s, W, H, dark = false) {
   const p = s.p, n = p.length / 3;
   if (!n) return;
   const base = s.w * W / 1000;
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = s.c;
   if (s.t === 'hl') {
-    ctx.globalAlpha = 0.38;
-    ctx.globalCompositeOperation = 'multiply';
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = s.c;
+    ctx.globalAlpha = dark ? 0.32 : 0.38;
+    ctx.globalCompositeOperation = dark ? 'source-over' : 'multiply';
     ctx.lineWidth = base;
     ctx.beginPath();
     ctx.moveTo(p[0] * W, p[1] * H);
     if (n === 1) ctx.lineTo(p[0] * W + 0.1, p[1] * H);
     for (let i = 3; i < p.length; i += 3) ctx.lineTo(p[i] * W, p[i + 1] * H);
     ctx.stroke();
-  } else if (n === 1) {
-    ctx.fillStyle = s.c;
-    ctx.beginPath();
-    ctx.arc(p[0] * W, p[1] * H, Math.max(0.6, base * (0.35 + p[2] * 1.1) / 2), 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    let px = p[0] * W, py = p[1] * H, mx = px, my = py;
-    for (let i = 3; i < p.length; i += 3) {
-      const x = p[i] * W, y = p[i + 1] * H, pr = p[i + 2];
-      const nx = (px + x) / 2, ny = (py + y) / 2;
-      ctx.beginPath();
-      ctx.moveTo(mx, my);
-      ctx.quadraticCurveTo(px, py, nx, ny);
-      ctx.lineWidth = Math.max(0.6, base * (0.35 + pr * 1.1));
-      ctx.stroke();
-      mx = nx; my = ny; px = x; py = y;
-    }
-    ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(px, py); ctx.stroke();
+    ctx.restore();
+    return;
   }
+  const color = inkColor(s.c, dark);
+  if (s.k === 'pencil') { drawPencil(ctx, s, W, H, base, color); return; }
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = ctx.fillStyle = color;
+  traceStroke(ctx, p, W, H, widthFn(s.k, base, n));
   ctx.restore();
 }
 
@@ -121,6 +291,10 @@ export class InkSurface {
     this.drawBackground = opts.drawBackground || null;
     this.loadFile = opts.loadFile || null;
     this.enabled = opts.enabled || (() => true);
+    // themed: la superficie segue il tema (carta scura e colori adattati). No per i PDF, che restano chiari.
+    this.themed = opts.themed !== false;
+    // adaptText: anche le caselle di testo cambiano colore col tema (no se hanno uno sfondo sempre chiaro)
+    this.adaptText = opts.adaptText !== false;
     this.visible = true;
     this.rendered = false;
     this.undoStack = [];
@@ -156,7 +330,16 @@ export class InkSurface {
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(el);
     this.unsub = tools.on(() => this.updateMode());
+    this.unTheme = onTheme(() => this.applyTheme());
+    el.classList.toggle('dark', this.dark);
     this.updateMode();
+  }
+
+  get dark() { return this.themed && isDarkTheme(); }
+  applyTheme() {
+    this.el.classList.toggle('dark', this.dark);
+    this.layoutObjects();
+    if (this.visible && this.rendered) this.renderAll();
   }
 
   // ---------- dimensioni e disegno ----------
@@ -202,7 +385,7 @@ export class InkSurface {
       ctx.drawImage(src, 0, 0, W, H);
     };
     let r;
-    try { r = this.drawBackground(W, H, this._d); } catch (e) { console.warn(e); return; }
+    try { r = this.drawBackground(W, H, this._d, this.dark); } catch (e) { console.warn(e); return; }
     if (r && typeof r.then === 'function') r.then(paint, e => console.warn(e));
     else paint(r);
   }
@@ -211,7 +394,8 @@ export class InkSurface {
     if (!this.rendered) return;
     const ctx = this.sizeCanvas(this.cv);
     ctx.clearRect(0, 0, this.W, this.H);
-    for (const s of this.data.strokes) drawStroke(ctx, s, this.W, this.H);
+    const dark = this.dark;
+    for (const s of this.data.strokes) drawStroke(ctx, s, this.W, this.H, dark);
   }
   clearLive() {
     if (!this.rendered) return;
@@ -273,7 +457,8 @@ export class InkSurface {
     this.pid = e.pointerId;
 
     if (tool === 'pen' || tool === 'highlighter') {
-      this.cur = { id: uid().replace(/-/g, '').slice(0, 10), t: tool === 'pen' ? 'pen' : 'hl', c: tools.colors[tool], w: tools.widths[tool], p: [] };
+      this.cur = { id: sid(), t: tool === 'pen' ? 'pen' : 'hl', c: tools.colors[tool], w: tools.widths[tool], p: [] };
+      if (tool === 'pen') this.cur.k = tools.penStyle;
       this.addPt(x, y, e);
       this.gesture = 'draw';
       this.paintLive();
@@ -321,7 +506,7 @@ export class InkSurface {
       if (s && s.p.length) {
         this.pushUndo(this.snap());
         this.data.strokes.push(s);
-        drawStroke(this.sizeCanvas(this.cv), s, this.W, this.H);
+        drawStroke(this.sizeCanvas(this.cv), s, this.W, this.H, this.dark);
         this.emit();
       }
     } else if (g === 'erase') {
@@ -351,7 +536,7 @@ export class InkSurface {
       if (!this.cur) return;
       const ctx = this.sizeCanvas(this.live);
       ctx.clearRect(0, 0, this.W, this.H);
-      drawStroke(ctx, this.cur, this.W, this.H);
+      drawStroke(ctx, this.cur, this.W, this.H, this.dark);
     });
   }
 
@@ -359,13 +544,19 @@ export class InkSurface {
   eraseAt(x, y) {
     const W = this.W, H = this.H, px = x * W, py = y * H;
     const r = tools.widths.eraser * W / 1000 / 2 + 1;
+    const partial = tools.eraserMode === 'partial';
     const keep = [];
+    let changed = false;
     for (const s of this.data.strokes) {
       const b = strokeBB(s), m = (r + s.w * W / 1000) / W, mY = (r + s.w * W / 1000) / H;
       if (x < b[0] - m || x > b[2] + m || y < b[1] - mY || y > b[3] + mY) { keep.push(s); continue; }
-      if (!this.hitStroke(s, px, py, r + s.w * W / 2000)) keep.push(s);
+      if (partial) {
+        const pieces = this.cutStroke(s, px, py, r + s.w * W / 4000);
+        if (pieces) { keep.push(...pieces); changed = true; } else keep.push(s);
+      } else if (this.hitStroke(s, px, py, r + s.w * W / 2000)) changed = true;
+      else keep.push(s);
     }
-    if (keep.length !== this.data.strokes.length) {
+    if (changed) {
       if (!this._erased) { this.pushUndo(this._before); this._erased = true; }
       this.data.strokes = keep;
       this.renderStrokes();
@@ -386,6 +577,37 @@ export class InkSurface {
       ax = bx; ay = by;
     }
     return false;
+  }
+  // Gomma parziale: toglie solo la parte del tratto sotto la gomma e divide il resto in pezzi.
+  // Restituisce null se il tratto non viene toccato.
+  cutStroke(s, px, py, rr) {
+    const p = s.p, W = this.W, H = this.H, step = Math.max(0.75, rr / 2);
+    // vicino alla gomma aggiunge punti intermedi, così il taglio è preciso
+    const q = [p[0], p[1], p[2]];
+    for (let i = 3; i < p.length; i += 3) {
+      const ax = p[i - 3] * W, ay = p[i - 2] * H, bx = p[i] * W, by = p[i + 1] * H;
+      if (distToSeg(px, py, ax, ay, bx, by) <= rr + step) {
+        const k = Math.ceil(Math.hypot(bx - ax, by - ay) / step);
+        for (let j = 1; j < k; j++) {
+          const t = j / k;
+          q.push(R5(p[i - 3] + (p[i] - p[i - 3]) * t), R5(p[i - 2] + (p[i + 1] - p[i - 2]) * t), Math.round((p[i - 1] + (p[i + 2] - p[i - 1]) * t) * 100) / 100);
+        }
+      }
+      q.push(p[i], p[i + 1], p[i + 2]);
+    }
+    const runs = [];
+    let run = [], removed = false;
+    for (let i = 0; i < q.length; i += 3) {
+      if (Math.hypot(q[i] * W - px, q[i + 1] * H - py) <= rr) {
+        removed = true;
+        if (run.length) runs.push(run);
+        run = [];
+      } else run.push(q[i], q[i + 1], q[i + 2]);
+    }
+    if (run.length) runs.push(run);
+    if (!removed) return null;
+    // i pezzetti di un solo punto lascerebbero dei puntini: si scartano
+    return runs.filter(r => r.length > 3).map(r => ({ ...s, id: sid(), p: r }));
   }
 
   // ---------- lazo ----------
@@ -512,7 +734,7 @@ export class InkSurface {
     if (!this.sel) return;
     this.pushUndo(this.snap());
     const d = 0.025, dy = d * this.W / this.H;
-    const strokes = this.sel.strokes.map(s => ({ ...s, id: uid().replace(/-/g, '').slice(0, 10), p:s.p.map((v, i) => i % 3 === 0 ? R5(v + d) : i % 3 === 1 ? R5(v + dy) : v) }));
+    const strokes = this.sel.strokes.map(s => ({ ...s, id: sid(), p: s.p.map((v, i) => i % 3 === 0 ? R5(v + d) : i % 3 === 1 ? R5(v + dy) : v) }));
     const texts = this.sel.texts.map(t => ({ ...t, id: uid(), x: t.x + d, y: t.y + dy }));
     const images = this.sel.images.map(im => ({ ...im, id: uid(), x: im.x + d, y: im.y + dy }));
     this.data.strokes.push(...strokes); this.data.texts.push(...texts); this.data.images.push(...images);
@@ -590,7 +812,7 @@ export class InkSurface {
     for (const el of this.txtLayer.children) {
       const t = el._t; if (!t) continue;
       el.style.left = t.x * W + 'px'; el.style.top = t.y * H + 'px'; el.style.width = t.w * W + 'px';
-      el.style.fontSize = (t.s * W / 1000) + 'px'; el.style.color = t.c;
+      el.style.fontSize = (t.s * W / 1000) + 'px'; el.style.color = inkColor(t.c, this.adaptText && this.dark);
     }
     for (const el of this.imgLayer.children) {
       const im = el._i; if (!im) continue;
@@ -636,6 +858,7 @@ export class InkSurface {
   destroy() {
     this.ro.disconnect();
     this.unsub();
+    this.unTheme();
     clearTimeout(this._rt);
     if (InkSurface.active === this) InkSurface.active = null;
   }
@@ -652,39 +875,75 @@ export function inkToolbar({ compact = false, lasso = true, text = true, hand = 
     text && ['text', 'text', 'Testo da tastiera (T)'],
   ].filter(Boolean);
   const toolBtns = defs.map(([id, ic, label]) => h('button', { class: 'tool-btn', title: label, 'aria-label': label, onclick: () => tools.set({ tool: id }) }, icon(ic)));
-  const colors = h('div', { class: 'tb-group tb-colors' });
-  const widthKey = () => (tools.tool in RANGES ? tools.tool : null);
-  const range = h('input', {
-    type: 'range', class: 'tb-width', 'aria-label': 'Spessore',
-    oninput: () => { const k = widthKey(); if (k) tools.set({ widths: { ...tools.widths, [k]: Number(range.value) } }); },
-  });
-  const rangeWrap = h('div', { class: 'tb-group tb-range', title: 'Spessore / dimensione testo' }, range);
+  // opzioni che cambiano in base allo strumento (tipo di penna, colori, spessori, modalità gomma)
+  const opts = h('div', { class: 'tb-opts' });
   const act = () => InkSurface.active;
   const undo = h('button', { class: 'tool-btn', title: 'Annulla (Ctrl+Z)', 'aria-label': 'Annulla', onclick: () => act() && act().undo() }, icon('undo'));
   const redo = h('button', { class: 'tool-btn', title: 'Ripeti (Ctrl+Y)', 'aria-label': 'Ripeti', onclick: () => act() && act().redo() }, icon('redo'));
   const handBtn = hand ? h('button', { class: 'tool-btn', title: 'Solo penna: il dito scorre, la penna scrive', 'aria-label': 'Solo penna', onclick: () => tools.set({ penOnly: !tools.penOnly }) }, icon('hand')) : null;
-  bar.append(h('div', { class: 'tb-group' }, toolBtns), colors, rangeWrap, h('div', { class: 'tb-group' }, undo, redo, handBtn), ...extra);
+  bar.append(h('div', { class: 'tb-group' }, toolBtns), opts, h('div', { class: 'tb-group' }, undo, redo, handBtn), ...extra);
 
-  function sync() {
-    defs.forEach(([id], i) => toolBtns[i].classList.toggle('active', tools.tool === id));
-    const t = tools.tool, key = t === 'highlighter' ? 'highlighter' : 'pen';
-    colors.hidden = t === 'eraser';
-    colors.replaceChildren();
+  function styleGroup() {
+    const cur = PEN_STYLES.find(s => s[0] === tools.penStyle) || PEN_STYLES[1];
+    const b = h('button', {
+      class: 'tb-group tb-style', type: 'button', title: 'Tipo di penna: ' + cur[1], 'aria-label': 'Tipo di penna: ' + cur[1],
+      onclick: () => popMenu(b, [{ heading: 'Tipo di penna' }, ...PEN_STYLES.map(([id, label]) => ({
+        label, icon: 'pen_' + id, active: tools.penStyle === id, onClick: () => tools.set({ penStyle: id }),
+      }))]),
+    }, icon('pen_' + cur[0]), h('span', { class: 'tb-style-name' }, cur[1]), icon('chevD', 'tb-chev'));
+    return b;
+  }
+  function colorGroup(key, dark) {
+    const adapt = key === 'pen' && dark;   // gli evidenziatori restano uguali in entrambi i temi
+    const g = h('div', { class: 'tb-group tb-colors' });
     for (const c of key === 'highlighter' ? HL_COLORS : PEN_COLORS) {
-      colors.append(h('button', {
-        class: 'swatch' + (tools.colors[key] === c ? ' active' : ''), style: { background: c }, title: c, 'aria-label': 'Colore ' + c,
+      const shown = adapt ? inkColor(c, true) : c;
+      g.append(h('button', {
+        class: 'swatch' + (tools.colors[key] === c ? ' active' : ''), style: { background: shown }, title: shown, 'aria-label': 'Colore ' + shown,
         onclick: () => tools.set({ colors: { ...tools.colors, [key]: c } }),
       }));
     }
-    const custom = h('input', { type: 'color', class: 'color-input', value: tools.colors[key], title: 'Colore personalizzato' });
-    custom.addEventListener('change', () => tools.set({ colors: { ...tools.colors, [key]: custom.value } }));
-    colors.append(custom);
-    const wk = widthKey();
-    rangeWrap.hidden = !wk;
-    if (wk) { const [mn, mx, st] = RANGES[wk]; range.min = mn; range.max = mx; range.step = st; range.value = tools.widths[wk]; }
+    const custom = h('input', { type: 'color', class: 'color-input', value: adapt ? inkColor(tools.colors[key], true) : tools.colors[key], title: 'Colore personalizzato', 'aria-label': 'Colore personalizzato' });
+    custom.addEventListener('change', () => tools.set({ colors: { ...tools.colors, [key]: adapt ? inkColorFromDark(custom.value) : custom.value } }));
+    g.append(custom);
+    return g;
+  }
+  function sizeGroup(t) {
+    const list = SIZES[t], cur = nearest(list, tools.widths[t]), unit = UNIT[t];
+    const g = h('div', { class: 'tb-group tb-sizes' + (t === 'eraser' ? ' eraser' : '') });
+    list.forEach((s, i) => {
+      const d = t === 'eraser' ? 6 + i * 5 : Math.round(3 + i * (11 / Math.max(1, list.length - 1)));
+      const name = t === 'eraser' ? 'Gomma ' + s.name.toLowerCase() : `${s.label} ${unit}`;
+      g.append(h('button', {
+        class: 'size-btn' + (i === cur ? ' active' : ''), type: 'button', title: name, 'aria-label': name,
+        onclick: () => tools.set({ widths: { ...tools.widths, [t]: s.w } }),
+      }, t === 'text' ? null : h('i', { style: { width: d + 'px', height: d + 'px' } }), h('span', {}, s.label)));
+    });
+    if (unit) g.append(h('span', { class: 'tb-unit' }, unit));
+    return g;
+  }
+  function eraserModeGroup() {
+    const g = h('div', { class: 'tb-group tb-mode' });
+    for (const [id, label, title] of [['stroke', 'Tratto intero', 'Cancella l\'intero tratto toccato'], ['partial', 'Parziale', 'Cancella solo la parte toccata']]) {
+      g.append(h('button', { class: 'mode-btn' + (tools.eraserMode === id ? ' active' : ''), type: 'button', title, onclick: () => tools.set({ eraserMode: id }) }, label));
+    }
+    return g;
+  }
+
+  function sync() {
+    defs.forEach(([id], i) => toolBtns[i].classList.toggle('active', tools.tool === id));
+    const t = tools.tool, dark = isDarkTheme();
+    if (toolBtns[0]) toolBtns[0].replaceChildren(icon('pen_' + tools.penStyle));
+    const parts = [];
+    if (t === 'pen') parts.push(styleGroup());
+    if (t !== 'eraser') parts.push(colorGroup(t === 'highlighter' ? 'highlighter' : 'pen', dark));
+    if (SIZES[t]) parts.push(sizeGroup(t));
+    if (t === 'eraser') parts.push(eraserModeGroup());
+    opts.replaceChildren(...parts);
     if (handBtn) handBtn.classList.toggle('active', !!tools.penOnly);
   }
-  bar.destroy = tools.on(sync);
+  const offTools = tools.on(sync), offTheme = onTheme(sync);
+  bar.destroy = () => { offTools(); offTheme(); };
   sync();
   return bar;
 }

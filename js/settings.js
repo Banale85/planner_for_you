@@ -7,6 +7,7 @@ import { tools } from './ink.js';
 import { importICS, exportICS } from './calendar.js';
 import { download, pickFile, blobToDataURL, dataURLToBlob, ymd } from './util.js';
 import * as sync from './sync.js';
+import { cats, loadCats, addCat, updateCat, removeCat, catDialog, MAX_CATS } from './categories.js';
 
 const STATUS_TEXT = { idle: 'Sincronizzato', syncing: 'Sincronizzazione in corso…', auth: 'Accesso scaduto: tocca "Riconnetti"', offline: 'Offline: le modifiche verranno inviate appena torni online', error: 'Errore', off: 'Non collegato' };
 
@@ -60,11 +61,45 @@ function driveCard() {
   return el;
 }
 
+// Categorie del calendario: create e personalizzate dall'utente (massimo 10)
+function catsCard() {
+  const list = h('div', { class: 'cat-list' });
+  const count = h('span', { class: 'muted small' });
+  const addBtn = h('button', {
+    class: 'btn', onclick: async () => { const r = await catDialog(); if (r) await addCat(r.name, r.color); },
+  }, icon('plus'), 'Nuova categoria');
+  function draw() {
+    const L = cats();
+    list.replaceChildren(...(L.length ? L.map(c => h('div', { class: 'cat-row' },
+      h('span', { class: 'cat-dot', style: { '--c': c.color || 'var(--cream)' } }),
+      h('span', { class: 'grow' }, c.name, c.color ? null : h('span', { class: 'muted small' }, ' · bianco panna')),
+      h('button', { class: 'icon-btn sm', title: 'Modifica', 'aria-label': 'Modifica ' + c.name, onclick: async () => { const r = await catDialog(c); if (r) await updateCat(c.id, r); } }, icon('edit')),
+      h('button', {
+        class: 'icon-btn sm', title: 'Elimina', 'aria-label': 'Elimina ' + c.name, onclick: async () => {
+          if (await confirmDialog(`Eliminare la categoria "${c.name}"? Gli eventi che la usano resteranno senza categoria.`, { title: 'Elimina categoria', okLabel: 'Elimina', danger: true })) await removeCat(c.id);
+        },
+      }, icon('trash'))))
+      : [h('p', { class: 'muted small' }, 'Nessuna categoria. Creane una per colorare gli eventi del calendario.')]));
+    count.textContent = `${L.length} di ${MAX_CATS}`;
+    addBtn.disabled = L.length >= MAX_CATS;
+  }
+  addEventListener('pfy-cats', draw);
+  loadCats().then(draw);
+  const el = h('section', { class: 'card' },
+    h('div', { class: 'card-head' }, icon('tag'), h('h3', {}, 'Categorie del calendario')),
+    h('p', { class: 'muted' }, `Crea fino a ${MAX_CATS} categorie e scegli se dare loro un colore: senza colore restano bianco panna.`),
+    list, h('div', { class: 'row' }, addBtn, count));
+  el.destroy = () => removeEventListener('pfy-cats', draw);
+  return el;
+}
+
 export function applyTheme() {
   let t = 'system';
   try { t = localStorage.getItem('pfy-theme') || 'system'; } catch { /* ignore */ }
   if (t === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
+  // avvisa penna e quaderni, che adattano carta e colori dell'inchiostro
+  dispatchEvent(new Event('pfy-theme'));
 }
 
 async function exportBackup() {
@@ -143,11 +178,13 @@ export async function renderSettings(host) {
   if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => { usage.textContent = `Spazio usato: ${(e.usage / 1048576).toFixed(1)} MB`; }).catch(() => {});
 
   const drive = driveCard();
+  const catCard = catsCard();
   const wrap = h('div', { class: 'settings' },
     h('div', { class: 'topbar' }, h('h1', {}, icon('settings'), 'Impostazioni')),
     h('div', { class: 'settings-body' },
       drive,
-      card('palette', 'Aspetto', 'Scegli il tema dell\'app.', seg),
+      catCard,
+      card('palette', 'Aspetto', 'Scegli il tema dell\'app. Nel tema scuro anche la carta dei quaderni diventa scura e l\'inchiostro si adatta: il nero diventa bianco e i colori più accesi (i PDF restano chiari).', seg),
       card('pen', 'Penna e scrittura', 'Con "Solo penna" attivo scrivi con la penna (Apple Pencil, S Pen…) e con il dito scorri e fai zoom. Si attiva da solo quando l\'app rileva una penna.',
         h('label', { class: 'switch-row' }, penOnly, h('span', {}, 'Solo penna (il dito scorre la pagina)'))),
       card('download', 'Installa sul dispositivo', 'L\'app non passa dall\'App Store: si installa direttamente dal browser e funziona anche offline.', installBody),
@@ -163,7 +200,7 @@ export async function renderSettings(host) {
           h('button', { class: 'btn', onclick: exportBackup }, icon('download'), 'Esporta backup'),
           h('button', { class: 'btn', onclick: importBackup }, icon('upload'), 'Importa backup'),
           usage)),
-      h('p', { class: 'muted center small' }, 'Planner for You · versione 1.1')));
+      h('p', { class: 'muted center small' }, 'Planner for You · versione 1.2')));
   host.append(wrap);
-  return () => drive.destroy();
+  return () => { drive.destroy(); catCard.destroy(); };
 }

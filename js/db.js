@@ -2,11 +2,12 @@
 // Ogni modifica viene segnalata al modulo di sincronizzazione (Google Drive).
 
 const DB_NAME = 'planner-for-you';
-const VERSION = 1;
-export const KEYS = { folders: 'id', notebooks: 'id', pages: 'id', events: 'id', files: 'id', calink: 'key', meta: 'key' };
+const VERSION = 2;
+// prefs: preferenze da condividere tra i dispositivi (es. le categorie del calendario)
+export const KEYS = { folders: 'id', notebooks: 'id', pages: 'id', events: 'id', files: 'id', calink: 'key', prefs: 'key', meta: 'key' };
 export const STORES = Object.keys(KEYS);
 // Archivi che vengono sincronizzati con Google Drive
-export const SYNCED = new Set(['folders', 'notebooks', 'pages', 'events', 'files', 'calink']);
+export const SYNCED = new Set(['folders', 'notebooks', 'pages', 'events', 'files', 'calink', 'prefs']);
 
 let hook = null;
 export const setWriteHook = f => { hook = f; };
@@ -28,7 +29,12 @@ function open() {
         }
       }
     };
-    r.onsuccess = () => resolve(r.result);
+    r.onsuccess = () => {
+      const d = r.result;
+      // una versione più nuova dell'app è stata aperta in un'altra scheda: ricarica per aggiornarsi
+      d.onversionchange = () => { d.close(); location.reload(); };
+      resolve(d);
+    };
     r.onerror = () => reject(r.error);
   });
   return dbp;

@@ -101,7 +101,7 @@ export function parseICS(text) {
       start: toLocalISO(s), end: toLocalISO(e), allDay,
       location: c.location || '', attendees: c.attendees.join(', '), meetingUrl: meet,
       notes: desc.replace(/_{8,}/g, '').replace(/\n{3,}/g, '\n\n').trim(),
-      category: meet ? 'purple' : 'blue', showAs: c.showAs || 'busy',
+      category: null, showAs: c.showAs || 'busy',
       reminder: c.reminder != null ? c.reminder : 15,
       rrule: c.rrule || null, exdates: c.exdates,
       ink: { strokes: [], texts: [], images: [] }, imported: true, createdAt: Date.now(),

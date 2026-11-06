@@ -5,7 +5,7 @@ import { db } from './db.js';
 import { h, modal, toast, popMenu, promptText, confirmDialog } from './ui.js';
 import { icon } from './icons.js';
 import { uid, debounce, loadScript, pickFile, download, fmt, clamp, safeName, parseLocal } from './util.js';
-import { InkSurface, inkToolbar, drawStroke, tools, emptyInk } from './ink.js';
+import { InkSurface, inkToolbar, drawStroke, tools, emptyInk, inkColor, isDarkTheme, onTheme } from './ink.js';
 import { fetchFile, isEnabled as isSyncEnabled } from './sync.js';
 
 const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -16,12 +16,14 @@ export const A4 = 1.41421356;
 export const COVERS = ['#5b5fc7', '#1a5fd0', '#038387', '#107c41', '#c19c00', '#e8730c', '#d13438', '#b4009e', '#7a3fd1', '#4f4f4f'];
 export const FOLDER_COLORS = ['#5b5fc7', '#1a5fd0', '#038387', '#107c41', '#c19c00', '#e8730c', '#d13438', '#b4009e', '#8a8a8a'];
 export const PAPERS = [['blank', 'Bianca'], ['lined', 'A righe'], ['grid', 'Quadretti'], ['dots', 'Puntini'], ['cornell', 'Cornell']];
-export const PAPER_COLORS = [['white', '#ffffff', 'Bianco'], ['cream', '#fbf5e4', 'Avorio'], ['mint', '#eef7ef', 'Menta'], ['sky', '#edf3fb', 'Cielo']];
-const paperHex = id => (PAPER_COLORS.find(p => p[0] === id) || PAPER_COLORS[0])[1];
+// [id, colore nel tema chiaro, nome, colore nel tema scuro]
+export const PAPER_COLORS = [['white', '#ffffff', 'Bianco', '#202020'], ['cream', '#fbf5e4', 'Avorio', '#28251e'], ['mint', '#eef7ef', 'Menta', '#1d2620'], ['sky', '#edf3fb', 'Cielo', '#1d222b']];
+const paperHex = (id, dark) => (PAPER_COLORS.find(p => p[0] === id) || PAPER_COLORS[0])[dark ? 3 : 1];
 
 // ---------- Carta e sfondi ----------
-export function drawPaper(ctx, W, H, paper = 'blank', color = 'white') {
-  ctx.fillStyle = paperHex(color);
+// dark = carta del tema scuro (righe chiare su fondo scuro)
+export function drawPaper(ctx, W, H, paper = 'blank', color = 'white', dark = false) {
+  ctx.fillStyle = paperHex(color, dark);
   ctx.fillRect(0, 0, W, H);
   const u = W / 1000;
   ctx.lineWidth = Math.max(0.6, 1.1 * u);
@@ -33,29 +35,29 @@ export function drawPaper(ctx, W, H, paper = 'blank', color = 'white') {
   if (paper === 'lined' || paper === 'cornell') {
     const g = 34 * u, top = 110 * u, L = [];
     for (let y = top; y < H - 30 * u; y += g) L.push([0, y, W, y]);
-    lines(L, 'rgba(70,110,190,.28)');
-    if (paper === 'lined') lines([[120 * u, 0, 120 * u, H]], 'rgba(215,60,60,.35)');
+    lines(L, dark ? 'rgba(130,165,235,.26)' : 'rgba(70,110,190,.28)');
+    if (paper === 'lined') lines([[120 * u, 0, 120 * u, H]], dark ? 'rgba(240,110,110,.4)' : 'rgba(215,60,60,.35)');
     else {
       ctx.lineWidth = Math.max(1, 2 * u);
-      lines([[280 * u, top - g, 280 * u, H - 280 * u], [0, H - 280 * u, W, H - 280 * u], [0, top - g, W, top - g]], 'rgba(60,60,60,.45)');
+      lines([[280 * u, top - g, 280 * u, H - 280 * u], [0, H - 280 * u, W, H - 280 * u], [0, top - g, W, top - g]], dark ? 'rgba(220,220,220,.35)' : 'rgba(60,60,60,.45)');
     }
   } else if (paper === 'grid') {
     const g = 25 * u, L = [];
     for (let x = g; x < W; x += g) L.push([x, 0, x, H]);
     for (let y = g; y < H; y += g) L.push([0, y, W, y]);
-    lines(L, 'rgba(0,0,0,.11)');
+    lines(L, dark ? 'rgba(255,255,255,.1)' : 'rgba(0,0,0,.11)');
   } else if (paper === 'dots') {
     const g = 25 * u, r = Math.max(0.8, 1.4 * u);
-    ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.beginPath();
+    ctx.fillStyle = dark ? 'rgba(255,255,255,.28)' : 'rgba(0,0,0,.3)'; ctx.beginPath();
     for (let x = g; x < W; x += g) for (let y = g; y < H; y += g) { ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, Math.PI * 2); }
     ctx.fill();
   }
 }
-export function paperCanvas(W, H, d, paper, color) {
+export function paperCanvas(W, H, d, paper, color, dark = false) {
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(W * d)); c.height = Math.max(1, Math.round(H * d));
   const ctx = c.getContext('2d'); ctx.scale(d, d);
-  drawPaper(ctx, W, H, paper, color);
+  drawPaper(ctx, W, H, paper, color, dark);
   return c;
 }
 
@@ -111,12 +113,12 @@ async function pdfCanvas(W, H, d, fileId, num) {
   await page.render({ canvasContext: ctx, viewport: vp }).promise;
   return c;
 }
-export const bgFor = p => (W, H, d) => (p.pdf ? pdfCanvas(W, H, d, p.pdf.fileId, p.pdf.page) : paperCanvas(W, H, d, p.paper, p.paperColor));
+export const bgFor = p => (W, H, d, dark) => (p.pdf ? pdfCanvas(W, H, d, p.pdf.fileId, p.pdf.page) : paperCanvas(W, H, d, p.paper, p.paperColor, dark));
 
-function drawText(ctx, t, W, H) {
+function drawText(ctx, t, W, H, dark) {
   const fs = t.s * W / 1000, lh = fs * 1.3, maxW = t.w * W;
   ctx.save();
-  ctx.fillStyle = t.c;
+  ctx.fillStyle = inkColor(t.c, dark);
   ctx.font = `${fs}px "Segoe UI", system-ui, -apple-system, sans-serif`;
   ctx.textBaseline = 'top';
   let y = t.y * H + (lh - fs) / 2;
@@ -131,18 +133,20 @@ function drawText(ctx, t, W, H) {
   }
   ctx.restore();
 }
-export async function renderPageToCanvas(p, width) {
+// dark = come appare nel tema scuro (per le miniature); esportazioni in PDF/immagine restano chiare
+export async function renderPageToCanvas(p, width, dark = false) {
+  dark = dark && !p.pdf;
   const W = width, H = Math.round(width * p.aspect);
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const ctx = c.getContext('2d');
-  try { const bg = await bgFor(p)(W, H, 1); ctx.drawImage(bg, 0, 0, W, H); }
+  try { const bg = await bgFor(p)(W, H, 1, dark); ctx.drawImage(bg, 0, 0, W, H); }
   catch { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); }
   const ink = p.ink || emptyInk();
   for (const im of ink.images) {
     try { const img = new Image(); img.src = await fileURL(im.fileId); await img.decode(); ctx.drawImage(img, im.x * W, im.y * H, im.w * W, im.h * H); } catch { /* immagine mancante */ }
   }
-  for (const s of ink.strokes) drawStroke(ctx, s, W, H);
-  for (const t of ink.texts) drawText(ctx, t, W, H);
+  for (const s of ink.strokes) drawStroke(ctx, s, W, H, dark);
+  for (const t of ink.texts) drawText(ctx, t, W, H, dark);
   return c;
 }
 
@@ -632,7 +636,7 @@ export async function renderNotebook(host, { id }) {
     for (const p of pages) {
       const el = h('div', { class: 'page', 'data-id': p.id, style: { width: w + 'px', height: Math.round(w * p.aspect) + 'px' } });
       pagesEl.append(el);
-      const s = new InkSurface(el, { data: p.ink, blend: true, drawBackground: bgFor(p), loadFile: fileURL, onChange: () => { saver(p)(); touchNb(); } });
+      const s = new InkSurface(el, { data: p.ink, blend: true, themed: !p.pdf, drawBackground: bgFor(p), loadFile: fileURL, onChange: () => { saver(p)(); touchNb(); } });
       s.setVisible(false);
       surfaces.set(p.id, s);
       io.observe(el);
@@ -734,7 +738,7 @@ export async function renderNotebook(host, { id }) {
     (async () => {
       for (let i = 0; i < pages.length; i++) {
         if (job !== thumbJob) return;
-        try { const c = await renderPageToCanvas(pages[i], 220); if (job === thumbJob) slots[i].append(c); } catch { /* ignore */ }
+        try { const c = await renderPageToCanvas(pages[i], 220, isDarkTheme()); if (job === thumbJob) slots[i].append(c); } catch { /* ignore */ }
       }
     })();
   }
@@ -861,12 +865,15 @@ export async function renderNotebook(host, { id }) {
   addEventListener('pfy-remote', onRemote);
 
   mountPages();
+  // cambio tema: le miniature vanno ridisegnate (le pagine si aggiornano da sole)
+  const offTheme = onTheme(() => refreshPanel());
 
   return () => {
     flushAll();
     for (const s of surfaces.values()) s.destroy();
     io.disconnect();
     tb.destroy();
+    offTheme();
     thumbJob++;
     document.removeEventListener('keydown', onKey);
     removeEventListener('resize', onResize);

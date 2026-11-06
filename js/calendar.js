@@ -9,17 +9,10 @@ import { uid, pad, ymd, hm, parseLocal, toLocalISO, addDays, startOfDay, sameDay
 import { InkSurface, inkToolbar, tools, emptyInk } from './ink.js';
 import { parseICS, toICS } from './ics.js';
 import { createLinkedNotebook, paperCanvas } from './notes.js';
+import { cats, catOf, catColor, isCream, catHex, loadCats, addCat, catDialog, MAX_CATS } from './categories.js';
 
-export const CATS = [
-  { id: 'purple', name: 'Riunione', c: '#5b5fc7' },
-  { id: 'blue', name: 'Lezione', c: '#0f6cbd' },
-  { id: 'green', name: 'Studio', c: '#107c41' },
-  { id: 'orange', name: 'Esame', c: '#e8730c' },
-  { id: 'red', name: 'Scadenza', c: '#d13438' },
-  { id: 'teal', name: 'Personale', c: '#038387' },
-  { id: 'gray', name: 'Altro', c: '#737373' },
-];
-const catOf = id => CATS.find(c => c.id === id) || CATS[0];
+// classe CSS degli eventi senza colore (bianco panna)
+const creamCls = id => (isCream(id) ? ' cream' : '');
 const HOUR = 48;
 const VIEWS = { day: 'Giorno', workweek: 'Settimana lavorativa', week: 'Settimana', month: 'Mese', agenda: 'Agenda' };
 const SHOW_AS = [['busy', 'Occupato'], ['free', 'Libero'], ['tentative', 'Provvisorio'], ['oof', 'Fuori sede']];
@@ -174,7 +167,7 @@ export function openEditor(o, preset, onSaved) {
   const src = o ? o.ev : null;
   const ev = src ? JSON.parse(JSON.stringify(src)) : {
     id: uid(), title: '', start: toLocalISO(preset.start), end: toLocalISO(preset.end), allDay: !!preset.allDay,
-    category: 'purple', showAs: 'busy', reminder: 15, attendees: '', location: '', meetingUrl: '', notes: '',
+    category: null, showAs: 'busy', reminder: 15, attendees: '', location: '', meetingUrl: '', notes: '',
     ink: emptyInk(), rrule: null, exdates: [], createdAt: Date.now(),
   };
   if (!ev.ink) ev.ink = emptyInk();
@@ -219,12 +212,24 @@ export function openEditor(o, preset, onSaved) {
   const syncJoin = () => { joinBtn.hidden = !link.value.trim(); };
   link.addEventListener('input', syncJoin); syncJoin();
 
-  let cat = ev.category || 'purple';
-  const dot = h('span', { class: 'cat-dot', style: { '--c': catOf(cat).c } });
-  const chips = h('div', { class: 'cat-chips' }, CATS.map(c => h('button', {
-    class: 'cat-chip' + (c.id === cat ? ' active' : ''), type: 'button', style: { '--c': c.c },
-    onclick: e => { cat = c.id; chips.querySelectorAll('.active').forEach(x => x.classList.remove('active')); e.currentTarget.classList.add('active'); dot.style.setProperty('--c', c.c); },
-  }, h('i'), c.name)));
+  // categoria: "Nessuna" + quelle create dall'utente + "Nuova" (fino a 10)
+  let cat = catOf(ev.category) ? ev.category : null;
+  const dot = h('span', { class: 'cat-dot', style: { '--c': catColor(cat) } });
+  const chips = h('div', { class: 'cat-chips' });
+  const pick = id => { cat = id; dot.style.setProperty('--c', catColor(id)); drawChips(); };
+  const drawChips = () => {
+    const chip = (id, name, color) => h('button', {
+      class: 'cat-chip' + (id === cat ? ' active' : ''), type: 'button', style: { '--c': color }, onclick: () => pick(id),
+    }, h('i'), name);
+    chips.replaceChildren(
+      chip(null, 'Nessuna', 'var(--cream)'),
+      ...cats().map(c => chip(c.id, c.name, c.color || 'var(--cream)')),
+      cats().length < MAX_CATS ? h('button', {
+        class: 'cat-chip add', type: 'button', title: 'Crea una nuova categoria',
+        onclick: async () => { const r = await catDialog(); if (!r) return; const c = await addCat(r.name, r.color); if (c) pick(c.id); },
+      }, icon('plus'), 'Nuova') : null);
+  };
+  drawChips();
   const showAs = h('select', { class: 'input sm', 'aria-label': 'Mostra come' }, SHOW_AS.map(([v, l]) => h('option', { value: v }, l)));
   showAs.value = ev.showAs || 'busy';
   const rem = h('select', { class: 'input sm', 'aria-label': 'Promemoria' }, REMINDERS.map(([v, l]) => h('option', { value: v }, l)));
@@ -290,7 +295,7 @@ export function openEditor(o, preset, onSaved) {
   const openNotes = async close => {
     if (!collect()) return;
     let nbId = ev.notebookId && (await db.get('notebooks', ev.notebookId)) ? ev.notebookId : null;
-    if (!nbId) { nbId = await createLinkedNotebook(ev, catOf(ev.category).c); ev.notebookId = nbId; }
+    if (!nbId) { nbId = await createLinkedNotebook(ev, catHex(ev.category)); ev.notebookId = nbId; }
     await db.put('events', ev);
     close();
     location.hash = '#/notebook/' + nbId;
@@ -317,7 +322,7 @@ export function openEditor(o, preset, onSaved) {
     title: src ? 'Modifica evento' : 'Nuova riunione', body, wide: true, dismissable: false, actions, cls: 'event-modal',
     onClose: () => { if (surface) surface.destroy(); tb.destroy(); },
   });
-  surface = new InkSurface(inkBox, { data: ev.ink, drawBackground: (W, H, d) => paperCanvas(W, H, d, 'lined', 'white') });
+  surface = new InkSurface(inkBox, { data: ev.ink, drawBackground: (W, H, d, dark) => paperCanvas(W, H, d, 'lined', 'white', dark) });
   if (!src) setTimeout(() => title.focus(), 60);
   return m;
 }
@@ -382,7 +387,8 @@ export async function renderCalendar(host) {
     const rec = (await db.get('calink', key)) || { key, strokes: [], texts: [], images: [] };
     if (destroyed || !el.isConnected) return;
     const save = debounce(() => db.put('calink', rec), 500);
-    overlay = new InkSurface(el, { data: rec, onChange: () => save(), enabled: () => st.writing });
+    // adaptText: false perché i testi sul calendario sono foglietti gialli, sempre chiari
+    overlay = new InkSurface(el, { data: rec, onChange: () => save(), enabled: () => st.writing, adaptText: false });
     overlay.flush = save.flush;
   }
 
@@ -405,7 +411,7 @@ export async function renderCalendar(host) {
   }
 
   const chip = (o, withTime) => {
-    const c = h('div', { class: 'chip', style: { '--c': catOf(o.ev.category).c }, title: o.ev.title },
+    const c = h('div', { class: 'chip' + creamCls(o.ev.category), style: { '--c': catColor(o.ev.category) }, title: o.ev.title },
       withTime && !o.ev.allDay ? h('b', {}, hm(o.start) + ' ') : null, o.ev.title || '(Senza titolo)');
     c.addEventListener('click', e => { e.stopPropagation(); if (!st.writing) openEditor(o, null, draw); });
     return c;
@@ -480,12 +486,12 @@ export async function renderCalendar(host) {
     });
 
     function evEl(it, col) {
-      const { o } = it, c = catOf(o.ev.category);
+      const { o } = it;
       const height = Math.max((it.e - it.s) / 60 * HOUR - 2, 18);
       const meta = h('div', { class: 'ev-meta' }, `${hm(o.start)} – ${hm(o.end)}`, o.ev.location ? ' · ' + o.ev.location : '');
       const el = h('div', {
-        class: 'ev' + (height < 40 ? ' short' : '') + ' show-' + (o.ev.showAs || 'busy'),
-        style: { top: it.s / 60 * HOUR + 'px', height: height + 'px', left: `calc(${it.col / it.n * 100}% + 2px)`, width: `calc(${100 / it.n}% - 4px)`, '--c': c.c },
+        class: 'ev' + (height < 40 ? ' short' : '') + ' show-' + (o.ev.showAs || 'busy') + creamCls(o.ev.category),
+        style: { top: it.s / 60 * HOUR + 'px', height: height + 'px', left: `calc(${it.col / it.n * 100}% + 2px)`, width: `calc(${100 / it.n}% - 4px)`, '--c': catColor(o.ev.category) },
         title: `${o.ev.title}\n${hm(o.start)} – ${hm(o.end)}${o.ev.location ? '\n' + o.ev.location : ''}`,
       },
         h('div', { class: 'ev-title' }, o.ev.meetingUrl ? icon('video', 'ev-ic') : null, o.ev.rrule ? icon('repeat', 'ev-ic') : null, o.ev.notebookId ? icon('notes', 'ev-ic') : null, o.ev.title || '(Senza titolo)'),
@@ -600,8 +606,8 @@ export async function renderCalendar(host) {
       list.append(h('div', { class: 'ag-day' + (sameDay(d, now) ? ' today' : '') },
         h('div', { class: 'ag-date' }, h('span', { class: 'num' }, d.getDate()), h('span', {}, cap(fmt.wdLong(d)) + ', ' + fmt.monthYear(d))),
         items.map(o => {
-          const c = catOf(o.ev.category);
-          return h('div', { class: 'ag-item', style: { '--c': c.c }, onclick: () => openEditor(o, null, draw) },
+          const c = catOf(o.ev.category) || {};
+          return h('div', { class: 'ag-item' + creamCls(o.ev.category), style: { '--c': catColor(o.ev.category) }, onclick: () => openEditor(o, null, draw) },
             h('div', { class: 'ag-time' }, o.ev.allDay ? 'Tutto il giorno' : [h('div', {}, hm(o.start)), h('div', { class: 'muted' }, hm(o.end))]),
             h('div', { class: 'ag-bar' }),
             h('div', { class: 'ag-main' },
@@ -638,7 +644,9 @@ export async function renderCalendar(host) {
             h('button', { class: 'icon-btn sm', 'aria-label': 'Mese precedente', onclick: () => { miniMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); drawMini(); } }, icon('chevL')),
             h('button', { class: 'icon-btn sm', 'aria-label': 'Mese successivo', onclick: () => { miniMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1); drawMini(); } }, icon('chevR')))),
         grid),
-      h('div', { class: 'legend' }, h('div', { class: 'section-title' }, 'Categorie'), CATS.map(c => h('div', { class: 'legend-row' }, h('i', { style: { background: c.c } }), c.name))));
+      h('div', { class: 'legend' }, h('div', { class: 'section-title' }, 'Categorie'),
+        cats().map(c => h('div', { class: 'legend-row' }, h('i', { style: { background: c.color || 'var(--cream)' } }), c.name)),
+        h('a', { class: 'legend-manage', href: '#/settings' }, cats().length ? 'Gestisci categorie' : '+ Crea una categoria')));
   }
 
   // Modifiche arrivate da un altro dispositivo
@@ -648,12 +656,17 @@ export async function renderCalendar(host) {
     draw();
   };
   const onFlush = () => { if (overlay) overlay.flush(); };
+  // categorie create, modificate o eliminate (qui o su un altro dispositivo)
+  const onCats = () => { if (!(overlay && overlay.isBusy())) draw(); };
   addEventListener('pfy-remote', onRemote);
   addEventListener('pfy-flush', onFlush);
+  addEventListener('pfy-cats', onCats);
 
+  await loadCats();
   await draw();
   return () => {
     destroyed = true;
+    removeEventListener('pfy-cats', onCats);
     removeEventListener('pfy-remote', onRemote);
     removeEventListener('pfy-flush', onFlush);
     if (overlay) { overlay.flush(); overlay.destroy(); }
