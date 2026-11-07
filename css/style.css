@@ -252,6 +252,16 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; white-space:
 .ink-live { touch-action: none; }
 .pen-only .ink-live { touch-action: pan-x pan-y; }
 .ink-surface.ink-off .ink-live, .ink-surface[data-tool="text"] .ink-live { pointer-events: none; }
+/* strumento Mano: dito e penna scorrono la pagina, col mouse si trascina */
+.ink-surface[data-tool="hand"]:not(.ink-off) .ink-live { touch-action: pan-x pan-y; cursor: grab; }
+.ink-surface.panning .ink-live { cursor: grabbing; }
+/* maniglia per spostare la casella di testo */
+.ink-text-handle {
+  position: absolute; z-index: 6; width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center;
+  background: var(--brand); color: #fff; cursor: move; touch-action: none; box-shadow: var(--shadow);
+}
+.ink-text-handle .icon { width: 16px; height: 16px; }
+.ink-surface:not([data-tool="text"]) .ink-text-handle, .ink-surface.ink-off .ink-text-handle { display: none; }
 .ink-layer { pointer-events: none; }
 .ink-surface[data-tool="text"]:not(.ink-off) .ink-txt { pointer-events: auto; cursor: text; }
 .ink-text {

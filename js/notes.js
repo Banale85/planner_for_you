@@ -819,7 +819,7 @@ export async function renderNotebook(host, { id }) {
     if (mod && k === 'z') { e.preventDefault(); if (s) (e.shiftKey ? s.redo() : s.undo()); }
     else if (mod && k === 'y') { e.preventDefault(); if (s) s.redo(); }
     else if (!mod && !e.altKey) {
-      const map = { p: 'pen', h: 'highlighter', e: 'eraser', l: 'lasso', t: 'text' };
+      const map = { p: 'pen', h: 'highlighter', e: 'eraser', l: 'lasso', t: 'text', m: 'hand' };
       if (map[k]) tools.set({ tool: map[k] });
       else if ((e.key === 'Delete' || e.key === 'Backspace') && s && s.sel) { e.preventDefault(); s.deleteSel(); }
     }

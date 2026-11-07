@@ -240,7 +240,7 @@ export function openEditor(o, preset, onSaved) {
   const notesTA = h('textarea', { class: 'input notes-ta', rows: '7', placeholder: 'Ordine del giorno, appunti, link utili…', 'aria-label': 'Note' });
   notesTA.value = ev.notes || '';
   const inkBox = h('div', { class: 'ev-ink' });
-  const tb = inkToolbar({ compact: true, hand: false });
+  const tb = inkToolbar({ compact: true, hand: false, penOnly: false });
   const inkWrap = h('div', { class: 'ev-ink-wrap' }, tb, inkBox);
   const hasInk = ev.ink.strokes.length || ev.ink.texts.length;
   const tabK = h('button', { class: 'tab', type: 'button', onclick: () => setTab('k') }, icon('keyboard'), 'Tastiera');

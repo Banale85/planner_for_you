@@ -318,13 +318,18 @@ export class InkSurface {
     this.live.addEventListener('pointerup', this._up);
     this.live.addEventListener('pointercancel', this._cancel);
     // iPad: impedisce che la Apple Pencil faccia scorrere la pagina
+    // (non con lo strumento Mano, che serve proprio a scorrere anche con la penna)
     const stylusGuard = e => {
-      if (!this.enabled()) return;
+      if (!this.enabled() || tools.tool === 'hand') return;
       for (const t of e.changedTouches) if (t.touchType === 'stylus') { e.preventDefault(); return; }
     };
     this.live.addEventListener('touchstart', stylusGuard, { passive: false });
     this.live.addEventListener('touchmove', stylusGuard, { passive: false });
     this.txtLayer.addEventListener('click', e => this._textClick(e));
+    // maniglia per trascinare la casella di testo in modifica
+    this.textHandle = h('div', { class: 'ink-text-handle', title: 'Trascina per spostare il testo', 'aria-label': 'Sposta il testo', hidden: true }, icon('move'));
+    this.textHandle.addEventListener('pointerdown', e => this._dragText(e));
+    el.append(this.textHandle);
 
     this.rebuildObjects();
     this.ro = new ResizeObserver(() => this.resize());
@@ -420,6 +425,7 @@ export class InkSurface {
     this.el.dataset.tool = tools.tool;
     const editable = on && tools.tool === 'text';
     for (const el of this.txtLayer.children) el.contentEditable = editable ? 'true' : 'false';
+    if (!editable && this._editing) this._editing.blur();
     if (this.sel && (!on || tools.tool !== 'lasso')) this.clearSel();
   }
 
@@ -445,6 +451,8 @@ export class InkSurface {
       tools.set({ penSeen: true, penOnly: true });
       toast('Penna rilevata: ora la penna scrive e il dito scorre la pagina.');
     }
+    // Mano: dito e penna scorrono la pagina (lo fa il browser); col mouse si trascina
+    if (tools.tool === 'hand') { if (e.pointerType === 'mouse' && e.button === 0) this.startPan(e); return; }
     if (e.pointerType === 'touch' && tools.penOnly) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (!this.rendered) { this.visible = true; this.renderAll(); }
@@ -620,10 +628,50 @@ export class InkSurface {
     ctx.fillStyle = 'rgba(91,95,199,.07)'; ctx.fill();
     ctx.setLineDash([5, 4]); ctx.strokeStyle = '#5b5fc7'; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
   }
+  // Trascinamento col mouse in modalità Mano: scorre il contenitore della pagina
+  startPan(e) {
+    let sc = this.el.parentElement;
+    const scrollable = n => {
+      const s = getComputedStyle(n);
+      return (/(auto|scroll)/.test(s.overflowY) && n.scrollHeight > n.clientHeight + 1) || (/(auto|scroll)/.test(s.overflowX) && n.scrollWidth > n.clientWidth + 1);
+    };
+    while (sc && sc !== document.body && !scrollable(sc)) sc = sc.parentElement;
+    if (!sc || sc === document.body) return;
+    e.preventDefault();
+    let lx = e.clientX, ly = e.clientY;
+    this.el.classList.add('panning');
+    const mv = ev => { sc.scrollLeft -= ev.clientX - lx; sc.scrollTop -= ev.clientY - ly; lx = ev.clientX; ly = ev.clientY; };
+    const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); this.el.classList.remove('panning'); };
+    addEventListener('pointermove', mv);
+    addEventListener('pointerup', up);
+  }
+  // Riquadro delle parole scritte (normalizzato). La casella di testo può essere molto più
+  // larga delle parole: per selezionarla col lazo conta il testo visibile, non la casella.
+  textBounds(t) {
+    const el = this.textEl(t);
+    const hh = (el ? el.offsetHeight : 20) / this.H;
+    const box = { x1: t.x, y1: t.y, x2: t.x + t.w, y2: t.y + hh };
+    if (!el || !el.firstChild) return box;
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    const b = r.getBoundingClientRect(), s = this.el.getBoundingClientRect();
+    if (!b.width || !s.width) return box;
+    return { ...box, x2: Math.min(box.x2, (b.right - s.left) / s.width + 0.004) };
+  }
   finishLasso() {
     const L = this.lasso; this.lasso = null; this.clearLive();
-    if (!L || L.length < 8) return;
+    if (!L) return;
     const W = this.W, H = this.H;
+    // un tocco (senza disegnare il lazo) su un testo o un'immagine li seleziona
+    if (L.length < 8) {
+      const x = L[0] / W, y = L[1] / H, pad = 6 / W;
+      const t = [...this.data.texts].reverse().find(q => { const b = this.textBounds(q); return x >= b.x1 - pad && x <= b.x2 + pad && y >= b.y1 && y <= b.y2; });
+      const im = !t && [...this.data.images].reverse().find(q => x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h);
+      if (!t && !im) return;
+      this.sel = { strokes: [], texts: t ? [t] : [], images: im ? [im] : [] };
+      this.drawSel(); this.showSelMenu();
+      return;
+    }
     const strokes = this.data.strokes.filter(s => {
       const p = s.p, step = Math.max(1, Math.floor(p.length / 3 / 30));
       let n = 0, inn = 0;
@@ -631,8 +679,8 @@ export class InkSurface {
       return n && inn / n >= 0.5;
     });
     const texts = this.data.texts.filter(t => {
-      const el = this.textEl(t), hh = el ? el.offsetHeight : 20;
-      return pointInPoly(t.x * W + t.w * W / 2, t.y * H + hh / 2, L);
+      const b = this.textBounds(t);
+      return pointInPoly((b.x1 + b.x2) / 2 * W, (b.y1 + b.y2) / 2 * H, L);
     });
     const images = this.data.images.filter(im => pointInPoly((im.x + im.w / 2) * W, (im.y + im.h / 2) * H, L));
     if (!strokes.length && !texts.length && !images.length) return;
@@ -648,8 +696,8 @@ export class InkSurface {
       x2 = Math.max(x2, b[2] + m); y2 = Math.max(y2, b[3] + m * this.W / this.H);
     }
     for (const t of this.sel.texts) {
-      const el = this.textEl(t), hh = (el ? el.offsetHeight : 20) / this.H;
-      x1 = Math.min(x1, t.x); y1 = Math.min(y1, t.y); x2 = Math.max(x2, t.x + t.w); y2 = Math.max(y2, t.y + hh);
+      const b = this.textBounds(t);
+      x1 = Math.min(x1, b.x1); y1 = Math.min(y1, b.y1); x2 = Math.max(x2, b.x2); y2 = Math.max(y2, b.y2);
     }
     for (const im of this.sel.images) {
       x1 = Math.min(x1, im.x); y1 = Math.min(y1, im.y); x2 = Math.max(x2, im.x + im.w); y2 = Math.max(y2, im.y + im.h);
@@ -770,9 +818,11 @@ export class InkSurface {
     el.innerText = t.v || '';
     el.contentEditable = this.enabled() && tools.tool === 'text' ? 'true' : 'false';
     el._t = t;
-    el.addEventListener('focus', () => { InkSurface.active = this; if (el._before == null) el._before = this.snap(); });
+    el.addEventListener('focus', () => { InkSurface.active = this; if (el._before == null) el._before = this.snap(); this._editing = el; this.placeHandle(); });
     el.addEventListener('input', () => { t.v = el.innerText.replace(/\n$/, ''); this.emit(); });
     el.addEventListener('blur', () => {
+      if (this._movingText) return;   // la maniglia sta spostando questo testo
+      if (this._editing === el) { this._editing = null; this.placeHandle(); }
       if (!el.innerText.trim()) {
         const i = this.data.texts.indexOf(t);
         if (i >= 0) this.data.texts.splice(i, 1);
@@ -792,6 +842,41 @@ export class InkSurface {
     return el;
   }
   textEl(t) { for (const el of this.txtLayer.children) if (el._t === t) return el; return null; }
+  // Maniglia sopra la casella di testo in modifica
+  placeHandle() {
+    const el = this._editing, hd = this.textHandle;
+    if (!el || !el.isConnected || !this.W) { hd.hidden = true; return; }
+    const t = el._t;
+    hd.hidden = false;
+    hd.style.left = Math.max(0, t.x * this.W - 2) + 'px';
+    hd.style.top = Math.max(0, t.y * this.H - 26) + 'px';
+  }
+  _dragText(e) {
+    const el = this._editing;
+    if (!el) return;
+    e.preventDefault(); e.stopPropagation();
+    const t = el._t, r = this.el.getBoundingClientRect();
+    let lx = e.clientX, ly = e.clientY;
+    this._movingText = true;
+    try { this.textHandle.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    const mv = ev => {
+      t.x = R5(Math.min(0.98, Math.max(-t.w + 0.02, t.x + (ev.clientX - lx) / r.width)));
+      t.y = R5(Math.min(0.98, Math.max(0, t.y + (ev.clientY - ly) / r.height)));
+      lx = ev.clientX; ly = ev.clientY;
+      this.layoutObjects(); this.placeHandle();
+    };
+    const up = () => {
+      this.textHandle.removeEventListener('pointermove', mv);
+      this.textHandle.removeEventListener('pointerup', up);
+      this.textHandle.removeEventListener('pointercancel', up);
+      this._movingText = false;
+      if (document.activeElement !== el) el.focus();
+      this.emit();
+    };
+    this.textHandle.addEventListener('pointermove', mv);
+    this.textHandle.addEventListener('pointerup', up);
+    this.textHandle.addEventListener('pointercancel', up);
+  }
   makeImgEl(im) {
     const el = h('img', { class: 'ink-img', draggable: 'false', alt: '' });
     el._i = im;
@@ -818,6 +903,7 @@ export class InkSurface {
       const im = el._i; if (!im) continue;
       el.style.left = im.x * W + 'px'; el.style.top = im.y * H + 'px'; el.style.width = im.w * W + 'px'; el.style.height = im.h * H + 'px';
     }
+    this.placeHandle();
   }
   addImage(fileId, aspect) {
     if (!this.W) return;
@@ -865,14 +951,16 @@ export class InkSurface {
 }
 
 // Barra degli strumenti di scrittura (condivisa tra quaderni e calendario)
-export function inkToolbar({ compact = false, lasso = true, text = true, hand = true, extra = [] } = {}) {
+// hand: strumento Mano (scorri con dito o penna). penOnly: pulsante "Solo penna".
+export function inkToolbar({ compact = false, lasso = true, text = true, hand = true, penOnly = true, extra = [] } = {}) {
   const bar = h('div', { class: 'ink-toolbar' + (compact ? ' compact' : '') });
   const defs = [
     ['pen', 'pen', 'Penna (P)'],
     ['highlighter', 'highlighter', 'Evidenziatore (H)'],
     ['eraser', 'eraser', 'Gomma (E)'],
-    lasso && ['lasso', 'lasso', 'Lazo: seleziona, sposta, ridimensiona (L)'],
+    lasso && ['lasso', 'lasso', 'Lazo: seleziona, sposta, ridimensiona. Tocca un testo per selezionarlo (L)'],
     text && ['text', 'text', 'Testo da tastiera (T)'],
+    hand && ['hand', 'hand', 'Mano: scorri la pagina con il dito o con la penna (M)'],
   ].filter(Boolean);
   const toolBtns = defs.map(([id, ic, label]) => h('button', { class: 'tool-btn', title: label, 'aria-label': label, onclick: () => tools.set({ tool: id }) }, icon(ic)));
   // opzioni che cambiano in base allo strumento (tipo di penna, colori, spessori, modalità gomma)
@@ -880,8 +968,8 @@ export function inkToolbar({ compact = false, lasso = true, text = true, hand = 
   const act = () => InkSurface.active;
   const undo = h('button', { class: 'tool-btn', title: 'Annulla (Ctrl+Z)', 'aria-label': 'Annulla', onclick: () => act() && act().undo() }, icon('undo'));
   const redo = h('button', { class: 'tool-btn', title: 'Ripeti (Ctrl+Y)', 'aria-label': 'Ripeti', onclick: () => act() && act().redo() }, icon('redo'));
-  const handBtn = hand ? h('button', { class: 'tool-btn', title: 'Solo penna: il dito scorre, la penna scrive', 'aria-label': 'Solo penna', onclick: () => tools.set({ penOnly: !tools.penOnly }) }, icon('hand')) : null;
-  bar.append(h('div', { class: 'tb-group' }, toolBtns), opts, h('div', { class: 'tb-group' }, undo, redo, handBtn), ...extra);
+  const penOnlyBtn = penOnly ? h('button', { class: 'tool-btn', title: 'Solo penna: la penna scrive, il dito scorre la pagina', 'aria-label': 'Solo penna', onclick: () => tools.set({ penOnly: !tools.penOnly }) }, icon('penOnly')) : null;
+  bar.append(h('div', { class: 'tb-group' }, toolBtns), opts, h('div', { class: 'tb-group' }, undo, redo, penOnlyBtn), ...extra);
 
   function styleGroup() {
     const cur = PEN_STYLES.find(s => s[0] === tools.penStyle) || PEN_STYLES[1];
@@ -936,11 +1024,11 @@ export function inkToolbar({ compact = false, lasso = true, text = true, hand = 
     if (toolBtns[0]) toolBtns[0].replaceChildren(icon('pen_' + tools.penStyle));
     const parts = [];
     if (t === 'pen') parts.push(styleGroup());
-    if (t !== 'eraser') parts.push(colorGroup(t === 'highlighter' ? 'highlighter' : 'pen', dark));
+    if (t !== 'eraser' && t !== 'hand') parts.push(colorGroup(t === 'highlighter' ? 'highlighter' : 'pen', dark));
     if (SIZES[t]) parts.push(sizeGroup(t));
     if (t === 'eraser') parts.push(eraserModeGroup());
     opts.replaceChildren(...parts);
-    if (handBtn) handBtn.classList.toggle('active', !!tools.penOnly);
+    if (penOnlyBtn) penOnlyBtn.classList.toggle('active', !!tools.penOnly);
   }
   const offTools = tools.on(sync), offTheme = onTheme(sync);
   bar.destroy = () => { offTools(); offTheme(); };

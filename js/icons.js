@@ -13,6 +13,9 @@ const P = {
   folderPlus: '<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2.5h7.5A2.5 2.5 0 0 1 21 10v7.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/><path d="M12 11v6M9 14h6"/>',
   folderMove: '<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2.5h7.5A2.5 2.5 0 0 1 21 10v7.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/><path d="M9 14h6M13 11.5l2.5 2.5-2.5 2.5"/>',
   pen: '<path d="M4 20l1-4.5L16 4.5a2.1 2.1 0 0 1 3 3L8 18.5z"/><path d="M14 6.5l3 3"/>',
+  // Solo penna: la penna scrive, il dito (frecce) scorre
+  penOnly: '<path d="M2.8 21.2l1-4.3L13.6 7.1a1.9 1.9 0 0 1 2.7 2.7L6.5 19.6z"/><path d="M11.8 8.9l2.7 2.7"/><path d="M20 3v13M17.2 5.8L20 3l2.8 2.8M17.2 13.2L20 16l2.8-2.8"/>',
+  move: '<path d="M12 3v18M3 12h18M12 3l-2.5 2.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5"/>',
   // tipi di penna (punta in basso a sinistra)
   pen_fountain: '<path d="M4 20l2.5-6.5L14 6l4 4-7.5 7.5z"/><path d="M4 20l5-5"/><circle cx="9.6" cy="14.4" r="1"/><path d="M14 6l2-2a1.4 1.4 0 0 1 2 0l2 2a1.4 1.4 0 0 1 0 2l-2 2"/>',
   pen_ball: '<path d="M4 20l1.5-3.5L15.5 6.5l2 2L7.5 18.5z"/><path d="M15.5 6.5l1.8-1.8a1.4 1.4 0 0 1 2 2L17.5 8.5"/><path d="M13 9l2 2"/>',
