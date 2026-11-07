@@ -2,7 +2,7 @@
 // PDF da annotare, pagine, scrittura a penna e testo da tastiera.
 
 import { db } from './db.js';
-import { h, modal, toast, popMenu, promptText, confirmDialog } from './ui.js';
+import { h, modal, toast, popMenu, promptText, confirmDialog, autoFocus } from './ui.js';
 import { icon } from './icons.js';
 import { uid, debounce, loadScript, pickFile, download, fmt, clamp, safeName, parseLocal } from './util.js';
 import { InkSurface, inkToolbar, drawStroke, tools, emptyInk, inkColor, isDarkTheme, onTheme } from './ink.js';
@@ -295,7 +295,7 @@ function newNotebookDialog(folderId) {
     actions: [{ label: 'Annulla' }, { label: 'Crea quaderno', primary: true, onClick: create }],
   });
   title.addEventListener('keydown', e => { if (e.key === 'Enter') create(m.close); });
-  setTimeout(() => title.focus(), 60);
+  autoFocus(title);
 }
 
 async function importPdf(folderId, after) {

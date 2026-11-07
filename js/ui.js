@@ -66,6 +66,20 @@ export function modal({ title, body, actions = [], wide = false, dismissable = t
   return { close, el: box };
 }
 
+// Mette il cursore in un campo appena aperto (es. il nome di una cartella).
+// iPad/iPhone: va fatto subito, dentro il tocco dell'utente. Se lo si fa in ritardo, iOS attiva il campo
+// senza aprire la tastiera e poi non la apre più nemmeno toccandolo (e la penna non ci scrive).
+export function autoFocus(inp, { select = false } = {}) {
+  const touch = navigator.maxTouchPoints > 0 || matchMedia('(pointer: coarse)').matches;
+  try { inp.focus({ preventScroll: true }); if (select) inp.select(); } catch { /* ignore */ }
+  if (!touch) {
+    setTimeout(() => { if (inp.isConnected && document.activeElement !== inp) { inp.focus(); if (select) inp.select(); } }, 60);
+    return;
+  }
+  // Se iOS ha comunque attivato il campo senza tastiera, il primo tocco lo riattiva come si deve
+  inp.addEventListener('pointerdown', () => { if (document.activeElement === inp) inp.blur(); }, { once: true });
+}
+
 export function promptText(title, { label = '', value = '', placeholder = '', okLabel = 'OK' } = {}) {
   return new Promise(res => {
     let done = false;
@@ -78,7 +92,7 @@ export function promptText(title, { label = '', value = '', placeholder = '', ok
       onClose: () => { if (!done) res(null); },
     });
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') finish(m.close); });
-    setTimeout(() => { inp.focus(); inp.select(); }, 60);
+    autoFocus(inp, { select: true });
   });
 }
 

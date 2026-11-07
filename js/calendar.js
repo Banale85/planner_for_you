@@ -3,7 +3,7 @@
 // e scrittura a penna o da tastiera direttamente sopra il calendario e nelle note di ogni evento.
 
 import { db } from './db.js';
-import { h, modal, toast, popMenu, confirmDialog, chooseDialog } from './ui.js';
+import { h, modal, toast, popMenu, confirmDialog, chooseDialog, autoFocus } from './ui.js';
 import { icon } from './icons.js';
 import { uid, pad, ymd, hm, parseLocal, toLocalISO, addDays, startOfDay, sameDay, startOfWeek, fmt, cap, pickFile, download, debounce, clamp } from './util.js';
 import { InkSurface, inkToolbar, tools, emptyInk } from './ink.js';
@@ -323,7 +323,7 @@ export function openEditor(o, preset, onSaved) {
     onClose: () => { if (surface) surface.destroy(); tb.destroy(); },
   });
   surface = new InkSurface(inkBox, { data: ev.ink, drawBackground: (W, H, d, dark) => paperCanvas(W, H, d, 'lined', 'white', dark) });
-  if (!src) setTimeout(() => title.focus(), 60);
+  if (!src) autoFocus(title);
   return m;
 }
 

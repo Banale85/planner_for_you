@@ -2,7 +2,7 @@
 // Senza un colore scelto, una categoria è "bianco panna". Si sincronizzano su tutti i dispositivi.
 
 import { db } from './db.js';
-import { h, modal, toast } from './ui.js';
+import { h, modal, toast, autoFocus } from './ui.js';
 import { uid } from './util.js';
 
 export const MAX_CATS = 10;
@@ -83,6 +83,6 @@ export function catDialog(cat = null) {
       onClose: () => { if (!done) res(null); },
     });
     name.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); finish(m.close); } });
-    setTimeout(() => name.focus(), 60);
+    autoFocus(name);
   });
 }

@@ -1,6 +1,6 @@
 // Service worker: rende l'app installabile e utilizzabile offline.
 // Quando modifichi i file dell'app, aumenta VERSION per far aggiornare i dispositivi.
-const VERSION = 'pfy-v5';
+const VERSION = 'pfy-v6';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/app.js', 'js/util.js', 'js/db.js', 'js/icons.js', 'js/ui.js', 'js/ink.js',
