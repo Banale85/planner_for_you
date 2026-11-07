@@ -1,10 +1,10 @@
 // Service worker: rende l'app installabile e utilizzabile offline.
 // Quando modifichi i file dell'app, aumenta VERSION per far aggiornare i dispositivi.
-const VERSION = 'pfy-v2';
+const VERSION = 'pfy-v4';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/app.js', 'js/util.js', 'js/db.js', 'js/icons.js', 'js/ui.js', 'js/ink.js',
-  'js/notes.js', 'js/calendar.js', 'js/ics.js', 'js/settings.js', 'js/sync.js', 'js/config.js',
+  'js/notes.js', 'js/calendar.js', 'js/ics.js', 'js/settings.js', 'js/sync.js', 'js/config.js', 'js/categories.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 const CDN = 'https://cdnjs.cloudflare.com/';
