@@ -72,13 +72,54 @@ export function modal({ title, body, actions = [], wide = false, dismissable = t
 export function autoFocus(inp, { select = false } = {}) {
   const touch = navigator.maxTouchPoints > 0 || matchMedia('(pointer: coarse)').matches;
   try { inp.focus({ preventScroll: true }); if (select) inp.select(); } catch { /* ignore */ }
-  if (!touch) {
-    setTimeout(() => { if (inp.isConnected && document.activeElement !== inp) { inp.focus(); if (select) inp.select(); } }, 60);
-    return;
-  }
-  // Se iOS ha comunque attivato il campo senza tastiera, il primo tocco lo riattiva come si deve
-  inp.addEventListener('pointerdown', () => { if (document.activeElement === inp) inp.blur(); }, { once: true });
+  if (!touch) setTimeout(() => { if (inp.isConnected && document.activeElement !== inp) { inp.focus(); if (select) inp.select(); } }, 60);
+  // su iPad, se il campo resta senza tastiera, ci pensa il controllo qui sotto al primo tocco col dito
 }
+
+// ---------- Consiglio Scribble (iPad) ----------
+export const isIPadOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+export const SCRIBBLE_TIP = 'Su iPad, dopo aver usato la Apple Pencil, la tastiera potrebbe non aprirsi nei campi di testo: iPad si aspetta che tu continui a scrivere a mano (funzione Scribble). Per evitarlo, apri Impostazioni → Apple Pencil e disattiva "Scribble". La scrittura a mano nell\'app continua a funzionare normalmente.';
+// Finestra mostrata una sola volta, al primo uso della penna su iPad. Restituisce true se è stata aperta.
+export function scribbleTipOnce() {
+  try { if (localStorage.getItem('pfy-scribble-tip')) return false; localStorage.setItem('pfy-scribble-tip', '1'); } catch { return false; }
+  modal({
+    title: 'Consiglio per la Apple Pencil',
+    body: h('div', {},
+      h('p', {}, 'Ora la penna scrive e il dito scorre la pagina (puoi cambiarlo con il pulsante "Solo penna").'),
+      h('p', {}, SCRIBBLE_TIP),
+      h('p', { class: 'muted small' }, 'Trovi questo consiglio anche in Impostazioni → Penna e scrittura.')),
+    actions: [{ label: 'Ho capito', primary: true }],
+  });
+  return true;
+}
+
+// ---------- Tastiera su iPad (anche dopo aver usato la Apple Pencil) ----------
+// Dopo l'uso della penna iPadOS si aspetta la scrittura a mano (Scribble): un campo può attivarsi
+// senza tastiera e, essendo già attivo, toccarlo col dito non la apre più. Qui, se tocchi col dito
+// un campo già attivo mentre la tastiera è chiusa, il campo viene "rilasciato": lo stesso tocco lo
+// riattiva e iPad apre la tastiera.
+const NO_KB = /^(checkbox|radio|range|color|button|submit|reset|file|date|time|datetime-local|month|week)$/i;
+const isTextField = el => !!el && (el.isContentEditable || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !NO_KB.test(el.type)));
+const keyboardOpen = () => !!window.visualViewport && window.visualViewport.height < window.innerHeight - 120;
+let lastPointer = '', penHints = 0;
+try { penHints = Number(localStorage.getItem('pfy-pen-kb-hint')) || 0; } catch { /* ignore */ }
+document.addEventListener('pointerdown', e => {
+  lastPointer = e.pointerType;
+  if (e.pointerType !== 'touch') return;
+  const a = document.activeElement;
+  if (!isTextField(a) || !(a === e.target || a.contains(e.target)) || keyboardOpen()) return;
+  a.blur();
+}, true);
+// Se un campo viene attivato con la penna, ricorda (poche volte) come aprire la tastiera
+document.addEventListener('focusin', e => {
+  if (lastPointer !== 'pen' || !isTextField(e.target) || penHints >= 3) return;
+  setTimeout(() => {
+    if (keyboardOpen() || document.activeElement !== e.target) return;
+    penHints++;
+    try { localStorage.setItem('pfy-pen-kb-hint', String(penHints)); } catch { /* ignore */ }
+    toast('Per la tastiera, tocca il campo con il dito. Per non avere più questo problema: Impostazioni di iPad → Apple Pencil → disattiva "Scribble".', { ms: 6000 });
+  }, 700);
+});
 
 export function promptText(title, { label = '', value = '', placeholder = '', okLabel = 'OK' } = {}) {
   return new Promise(res => {

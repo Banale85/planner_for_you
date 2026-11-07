@@ -2,7 +2,7 @@
 // lazo (seleziona / sposta / ridimensiona), caselle di testo da tastiera e immagini.
 // Le coordinate sono normalizzate (0..1) così il disegno si adatta a zoom e schermi diversi.
 
-import { h, toast, popMenu } from './ui.js';
+import { h, toast, popMenu, isIPadOS, scribbleTipOnce } from './ui.js';
 import { icon } from './icons.js';
 import { uid } from './util.js';
 
@@ -449,8 +449,10 @@ export class InkSurface {
     if (!this.enabled()) return;
     if (e.pointerType === 'pen' && !tools.penSeen) {
       tools.set({ penSeen: true, penOnly: true });
-      toast('Penna rilevata: ora la penna scrive e il dito scorre la pagina.');
+      if (!isIPadOS()) toast('Penna rilevata: ora la penna scrive e il dito scorre la pagina.');
     }
+    // su iPad, al primo uso della penna: consiglio su Scribble (una volta sola)
+    if (e.pointerType === 'pen' && isIPadOS() && scribbleTipOnce()) return;
     // Mano: dito e penna scorrono la pagina (lo fa il browser); col mouse si trascina
     if (tools.tool === 'hand') { if (e.pointerType === 'mouse' && e.button === 0) this.startPan(e); return; }
     if (e.pointerType === 'touch' && tools.penOnly) return;

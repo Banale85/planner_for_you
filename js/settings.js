@@ -1,7 +1,7 @@
 // Impostazioni: tema, penna, installazione, notifiche, calendario Teams, backup
 
 import { db, STORES } from './db.js';
-import { h, toast, confirmDialog } from './ui.js';
+import { h, toast, confirmDialog, SCRIBBLE_TIP } from './ui.js';
 import { icon } from './icons.js';
 import { tools } from './ink.js';
 import { importICS, exportICS } from './calendar.js';
@@ -186,7 +186,9 @@ export async function renderSettings(host) {
       catCard,
       card('palette', 'Aspetto', 'Scegli il tema dell\'app. Nel tema scuro anche la carta dei quaderni diventa scura e l\'inchiostro si adatta: il nero diventa bianco e i colori più accesi (i PDF restano chiari).', seg),
       card('pen', 'Penna e scrittura', 'Con "Solo penna" attivo scrivi con la penna (Apple Pencil, S Pen…) e con il dito scorri e fai zoom. Si attiva da solo quando l\'app rileva una penna.',
-        h('label', { class: 'switch-row' }, penOnly, h('span', {}, 'Solo penna (il dito scorre la pagina)'))),
+        h('label', { class: 'switch-row' }, penOnly, h('span', {}, 'Solo penna (il dito scorre la pagina)')),
+        h('div', { class: 'note-bar tip' }, icon('keyboard'), h('div', {},
+          h('b', {}, 'iPad con Apple Pencil: '), SCRIBBLE_TIP))),
       card('download', 'Installa sul dispositivo', 'L\'app non passa dall\'App Store: si installa direttamente dal browser e funziona anche offline.', installBody),
       card('bell', 'Promemoria', 'Ricevi un avviso prima delle riunioni e delle lezioni.',
         h('div', { class: 'row' }, h('button', { class: 'btn', onclick: async () => { if ('Notification' in window) { await Notification.requestPermission(); updNotif(); } } }, icon('bell'), 'Attiva notifiche'), notifState)),

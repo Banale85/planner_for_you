@@ -252,6 +252,8 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; white-space:
 .ink-live { touch-action: none; }
 .pen-only .ink-live { touch-action: pan-x pan-y; }
 .ink-surface.ink-off .ink-live, .ink-surface[data-tool="text"] .ink-live { pointer-events: none; }
+/* scrittura spenta (es. calendario fuori da "Scrivi"): lo strato non deve coprire eventi e griglia */
+.ink-surface.ink-off, .ink-surface.ink-off * { pointer-events: none !important; }
 /* strumento Mano: dito e penna scorrono la pagina, col mouse si trascina */
 .ink-surface[data-tool="hand"]:not(.ink-off) .ink-live { touch-action: pan-x pan-y; cursor: grab; }
 .ink-surface.panning .ink-live { cursor: grabbing; }
@@ -425,6 +427,8 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; white-space:
 .swatch.cream { box-shadow: 0 0 0 1px var(--cream-line); }
 .swatch.cream.active { box-shadow: 0 0 0 2px var(--brand); }
 .note-bar { display: flex; align-items: center; gap: 8px; background: var(--brand-soft); color: var(--text); padding: 8px 12px; border-radius: 8px; font-size: 13px; }
+.note-bar.tip { align-items: flex-start; margin-top: 12px; line-height: 1.45; }
+.note-bar.tip > .icon { margin-top: 1px; color: var(--brand); }
 .evf-notes { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
 .tab { border: 0; background: none; padding: 8px 12px; font-weight: 600; color: var(--text2); border-bottom: 2px solid transparent; display: flex; gap: 6px; align-items: center; margin-bottom: -1px; }

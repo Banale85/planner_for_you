@@ -93,3 +93,6 @@ L'app funziona anche offline: le modifiche partono appena torna la connessione.
 - Senza Google Drive collegato, i dati restano solo sul dispositivo (IndexedDB). Il backup manuale resta disponibile in Impostazioni.
 - Il calendario Teams si importa via file `.ics`; la sincronizzazione automatica in tempo reale richiederebbe una registrazione dell'app su Microsoft (Azure) e spesso il consenso dell'università.
 - Le notifiche arrivano mentre l'app è aperta (su iPhone/iPad solo dopo averla installata).
+- **iPad con Apple Pencil**: dopo aver usato la penna, iPad potrebbe non aprire la tastiera nei campi di testo
+  (si aspetta la scrittura a mano, funzione *Scribble*). Per evitarlo: Impostazioni di iPad → Apple Pencil → disattiva **Scribble**.
+  In alternativa, tocca il campo con il dito invece che con la penna.

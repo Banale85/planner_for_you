@@ -291,8 +291,15 @@ export function openEditor(o, preset, onSaved) {
     if (isNaN(parseLocal(ev.start))) { toast('Data non valida'); return false; }
     return true;
   };
-  const save = async close => { if (!collect()) return; await db.put('events', ev); close(); onSaved && onSaved(); };
+  // Prima di leggere i campi, chiude la scrittura in corso: su iPad la parola appena scritta
+  // (tastiera con suggerimenti o penna con Scribble) viene confermata solo quando il campo si chiude.
+  const commitTyping = async () => {
+    const a = document.activeElement;
+    if (a && body.contains(a) && a !== document.body) { a.blur(); await new Promise(r => setTimeout(r, 60)); }
+  };
+  const save = async close => { await commitTyping(); if (!collect()) return; await db.put('events', ev); close(); onSaved && onSaved(); };
   const openNotes = async close => {
+    await commitTyping();
     if (!collect()) return;
     let nbId = ev.notebookId && (await db.get('notebooks', ev.notebookId)) ? ev.notebookId : null;
     if (!nbId) { nbId = await createLinkedNotebook(ev, catHex(ev.category)); ev.notebookId = nbId; }
@@ -507,8 +514,10 @@ export async function renderCalendar(host) {
         const sx = e.clientX, sy = e.clientY, origIdx = cols.indexOf(col), dur = o.end - o.start;
         colRects = null;
         let dragging = false, ns = o.start, ne = o.end;
+        // con la penna la mano trema un po' durante un tocco: serve un movimento più ampio per trascinare
+        const minMove = e.pointerType === 'pen' ? 12 : 5;
         const move = ev => {
-          if (!dragging && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+          if (!dragging && Math.hypot(ev.clientX - sx, ev.clientY - sy) < minMove) return;
           if (o.ev.rrule) return;
           dragging = true; el.classList.add('dragging');
           const dmin = Math.round((ev.clientY - sy) / HOUR * 4) * 15;
@@ -525,7 +534,12 @@ export async function renderCalendar(host) {
         };
         const up = async () => {
           removeEventListener('pointermove', move); removeEventListener('pointerup', up); cleanupDrag = null;
-          if (!dragging) { openEditor(o, null, draw); return; }
+          // nessuno spostamento reale: è un tocco, apre l'evento per modificarlo o eliminarlo
+          if (!dragging || (+ns === +o.start && +ne === +o.end)) {
+            el.style.transform = ''; el.classList.remove('dragging');
+            openEditor(o, null, draw);
+            return;
+          }
           const updated = { ...o.ev, start: toLocalISO(ns), end: toLocalISO(ne), updatedAt: Date.now() };
           await db.put('events', updated);
           draw();
