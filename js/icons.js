@@ -24,6 +24,7 @@ const P = {
   pen_brush: '<path d="M4.5 19.5c1.5.2 3.6-.2 4.8-1.4 1.2-1.2 1-3-.2-4.2s-3-1.4-4.2-.2C3.7 15 4.6 17 4.5 19.5z"/><path d="M9.5 13.5l9-9a1.4 1.4 0 0 1 2 2l-9 9"/>',
   highlighter: '<path d="M14.5 4.5l5 5L11 18H6v-5z"/><path d="M6 18l-2.5 2.5H9"/><path d="M10.5 9.5l4 4"/>',
   eraser: '<path d="M7.5 20H20"/><path d="M4.4 14.6l9.9-9.9a2 2 0 0 1 2.8 0l2.2 2.2a2 2 0 0 1 0 2.8L10 19.1a3 3 0 0 1-4.2 0l-1.4-1.4a2.2 2.2 0 0 1 0-3.1z"/><path d="M9 10l5 5"/>',
+  shapes: '<circle cx="7.5" cy="7.5" r="4.5"/><rect x="12.5" y="12.5" width="8.5" height="8.5" rx="1"/><path d="M3 21l6.5-6.5"/>',
   lasso: '<path d="M7 17.5C4.5 16.3 3 14.4 3 12c0-4.4 4-8 9-8s9 3.6 9 8-4 8-9 8c-1.3 0-2.6-.2-3.7-.6" stroke-dasharray="3 2.6"/><circle cx="7" cy="18.5" r="1.8"/>',
   text: '<path d="M5 7V4.5h14V7M12 4.5v15M9 19.5h6"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="9.5" r="1.8"/><path d="M21 16l-5-5-9 9"/>',

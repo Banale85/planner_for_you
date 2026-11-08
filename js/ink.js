@@ -45,11 +45,12 @@ export const tools = {
   widths: { pen: SIZES.pen[2].w, highlighter: SIZES.highlighter[1].w, eraser: SIZES.eraser[1].w, text: SIZES.text[2].w },
   penOnly: false,
   penSeen: false,
+  shapes: false,                 // modalità Forme: ogni tratto diventa una forma perfetta
   _l: new Set(),
   load() {
     try {
       const s = JSON.parse(localStorage.getItem(LS) || '{}');
-      for (const k of ['tool', 'penStyle', 'eraserMode', 'penOnly', 'penSeen']) if (k in s) this[k] = s[k];
+      for (const k of ['tool', 'penStyle', 'eraserMode', 'penOnly', 'penSeen', 'shapes']) if (k in s) this[k] = s[k];
       if (s.colors) Object.assign(this.colors, s.colors);
       if (s.widths) Object.assign(this.widths, s.widths);
     } catch { /* nessun salvataggio */ }
@@ -61,7 +62,7 @@ export const tools = {
     Object.assign(this, p);
     try {
       localStorage.setItem(LS, JSON.stringify({
-        tool: this.tool, penStyle: this.penStyle, eraserMode: this.eraserMode, colors: this.colors, widths: this.widths, penOnly: this.penOnly, penSeen: this.penSeen,
+        tool: this.tool, penStyle: this.penStyle, eraserMode: this.eraserMode, colors: this.colors, widths: this.widths, penOnly: this.penOnly, penSeen: this.penSeen, shapes: this.shapes,
       }));
     } catch { /* ignore */ }
     document.documentElement.classList.toggle('pen-only', !!this.penOnly);
@@ -280,6 +281,105 @@ function strokeBB(s) {
   return b;
 }
 
+// ---------- Forme ----------
+// Riconosce linea, cerchio/ellisse, triangolo, rettangolo e poligoni da un tratto disegnato a mano.
+// pts: punti in pixel [[x, y], ...]. Restituisce { type, v: vertici, closed } oppure null.
+function rdp(pts, eps) {
+  if (pts.length < 3) return pts.slice();
+  const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    const [ax, ay] = pts[a], [bx, by] = pts[b], len = Math.hypot(bx - ax, by - ay) || 1;
+    let md = 0, mi = -1;
+    for (let i = a + 1; i < b; i++) {
+      const d = Math.abs((bx - ax) * (ay - pts[i][1]) - (ax - pts[i][0]) * (by - ay)) / len;
+      if (d > md) { md = d; mi = i; }
+    }
+    if (md > eps) { keep[mi] = 1; stack.push([a, mi], [mi, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+// toglie i vertici dove il contorno quasi non gira (poligono chiuso)
+function dropFlat(poly) {
+  let changed = true;
+  while (changed && poly.length > 3) {
+    changed = false;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[(i - 1 + poly.length) % poly.length], b = poly[i], c = poly[(i + 1) % poly.length];
+      const t = Math.abs(Math.atan2(c[1] - b[1], c[0] - b[0]) - Math.atan2(b[1] - a[1], b[0] - a[0]));
+      const turn = Math.min(t, 2 * Math.PI - t);
+      if (turn < 0.45) { poly.splice(i, 1); changed = true; break; }
+    }
+  }
+  return poly;
+}
+// raddrizza la linea se è quasi orizzontale, verticale o a 45°
+function snapLine(a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy), ang = Math.atan2(dy, dx);
+  const step = Math.PI / 4, near = Math.round(ang / step) * step;
+  if (Math.abs(ang - near) < 0.07) return [a, [a[0] + Math.cos(near) * len, a[1] + Math.sin(near) * len]];
+  return [a, b];
+}
+export function recognizeShape(pts) {
+  if (pts.length < 3) return null;
+  let L = 0, x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const [x, y] = pts[i];
+    if (i) L += Math.hypot(x - pts[i - 1][0], y - pts[i - 1][1]);
+    if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y;
+  }
+  const w = x1 - x0, hgt = y1 - y0, diag = Math.hypot(w, hgt);
+  if (diag < 10) return null;
+  const a = pts[0], b = pts[pts.length - 1], d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (d > 0.9 * L) return { type: 'line', v: snapLine(a, b), closed: false };
+  // le forme aperte che non sono linee restano scritte a mano (es. lettere)
+  if (d > Math.max(16, 0.25 * diag)) return null;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, rx = Math.max(w / 2, 1), ry = Math.max(hgt / 2, 1);
+  let err = 0;
+  for (const [x, y] of pts) err += Math.abs(Math.hypot((x - cx) / rx, (y - cy) / ry) - 1);
+  err /= pts.length;
+  const ellipse = () => {
+    let erx = rx, ery = ry;
+    if (Math.abs(rx - ry) / Math.max(rx, ry) < 0.2) erx = ery = (rx + ry) / 2;   // quasi tondo → cerchio
+    return { type: erx === ery ? 'circle' : 'ellipse', c: [cx, cy], r: [erx, ery], start: Math.atan2((a[1] - cy) / ery, (a[0] - cx) / erx), closed: true };
+  };
+  if (err < 0.1) return ellipse();
+  let poly = rdp(pts, Math.max(5, diag * 0.08));
+  if (poly.length > 2 && Math.hypot(poly[0][0] - poly[poly.length - 1][0], poly[0][1] - poly[poly.length - 1][1]) < Math.max(16, 0.25 * diag)) poly.pop();
+  poly = dropFlat(poly);
+  if (poly.length === 3) return { type: 'triangle', v: poly, closed: true };
+  if (poly.length === 4) {
+    // lati quasi orizzontali/verticali → rettangolo perfetto
+    const axis = poly.every((p, i) => {
+      const q = poly[(i + 1) % 4], ang = Math.abs(Math.atan2(q[1] - p[1], q[0] - p[0])) % (Math.PI / 2);
+      return Math.min(ang, Math.PI / 2 - ang) < 0.26;
+    });
+    return { type: 'rect', v: axis ? [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] : poly, closed: true };
+  }
+  if (poly.length >= 5 && poly.length <= 8 && err > 0.14) return { type: 'polygon', v: poly, closed: true };
+  if (err < 0.2) return ellipse();
+  return null;
+}
+// punti fitti lungo la forma (in pixel), così ogni tipo di penna la disegna bene
+function shapePoints(sh) {
+  const out = [];
+  if (sh.c) {
+    const [cx, cy] = sh.c, [rx, ry] = sh.r;
+    const n = Math.max(48, Math.round(Math.PI * (rx + ry) / 2.5));
+    for (let i = 0; i <= n; i++) { const t = sh.start + (i / n) * Math.PI * 2; out.push([cx + rx * Math.cos(t), cy + ry * Math.sin(t)]); }
+    return out;
+  }
+  const v = sh.closed ? [...sh.v, sh.v[0]] : sh.v;
+  for (let i = 0; i < v.length - 1; i++) {
+    const [ax, ay] = v[i], [bx, by] = v[i + 1], n = Math.max(1, Math.round(Math.hypot(bx - ax, by - ay) / 2.5));
+    for (let k = 0; k < n; k++) out.push([ax + (bx - ax) * k / n, ay + (by - ay) * k / n]);
+  }
+  out.push(v[v.length - 1]);
+  return out;
+}
+export const SHAPE_NAMES = { line: 'Linea', circle: 'Cerchio', ellipse: 'Ellisse', triangle: 'Triangolo', rect: 'Rettangolo', polygon: 'Poligono' };
+
 export class InkSurface {
   static active = null;
 
@@ -325,6 +425,36 @@ export class InkSurface {
     };
     this.live.addEventListener('touchstart', stylusGuard, { passive: false });
     this.live.addEventListener('touchmove', stylusGuard, { passive: false });
+    // Tocco con 2 dita = Annulla, con 3 dita = Ripeti (come in Noteful/GoodNotes)
+    this._mt = null;
+    const fingers = e => [...e.touches].filter(t => t.touchType !== 'stylus');
+    this._mtStart = e => {
+      if (!this.enabled()) return;
+      const f = fingers(e);
+      if (!f.length) return;
+      if (!this._mt) this._mt = { t: Date.now(), max: 0, pos: new Map(), bad: false };
+      const m = this._mt;
+      for (const t of f) if (!m.pos.has(t.identifier)) m.pos.set(t.identifier, [t.clientX, t.clientY]);
+      m.max = Math.max(m.max, f.length);
+    };
+    this._mtMove = e => {
+      const m = this._mt;
+      if (!m) return;
+      for (const t of e.touches) { const p = m.pos.get(t.identifier); if (p && Math.hypot(t.clientX - p[0], t.clientY - p[1]) > 14) m.bad = true; }
+    };
+    this._mtEnd = e => {
+      const m = this._mt;
+      if (!m || fingers(e).length) return;   // aspetta che si alzino tutte le dita
+      this._mt = null;
+      if (m.bad || Date.now() - m.t > 450 || m.max < 2 || m.max > 3) return;
+      const s = InkSurface.active && InkSurface.active.el.isConnected ? InkSurface.active : this;
+      if (m.max === 2) toast(s.undo() ? 'Annullato' : 'Niente da annullare', { ms: 900 });
+      else toast(s.redo() ? 'Ripristinato' : 'Niente da ripristinare', { ms: 900 });
+    };
+    el.addEventListener('touchstart', this._mtStart, { passive: true });
+    el.addEventListener('touchmove', this._mtMove, { passive: true });
+    el.addEventListener('touchend', this._mtEnd, { passive: true });
+    el.addEventListener('touchcancel', this._mtEnd, { passive: true });
     this.txtLayer.addEventListener('click', e => this._textClick(e));
     // maniglia per trascinare la casella di testo in modifica
     this.textHandle = h('div', { class: 'ink-text-handle', title: 'Trascina per spostare il testo', 'aria-label': 'Sposta il testo', hidden: true }, icon('move'));
@@ -471,6 +601,9 @@ export class InkSurface {
       if (tool === 'pen') this.cur.k = tools.penStyle;
       this.addPt(x, y, e);
       this.gesture = 'draw';
+      this._shape = null;
+      this._holdAt = [e.clientX, e.clientY];
+      this.armHold();
       this.paintLive();
     } else if (tool === 'eraser') {
       this.gesture = 'erase';
@@ -498,7 +631,21 @@ export class InkSurface {
     const list = e.getCoalescedEvents ? e.getCoalescedEvents() : null;
     const evs = list && list.length ? list : [e];
     const g = this.gesture;
-    if (g === 'draw') { for (const ev of evs) { const [x, y] = this.norm(ev); this.addPt(x, y, ev); } this.paintLive(); }
+    if (g === 'draw') {
+      // forma già riconosciuta: la linea segue la penna, le altre forme restano ferme
+      if (this._shape) {
+        if (this._shape.type === 'line') {
+          const [x, y] = this.norm(e);
+          this._shape.v = snapLine(this._shape.v[0], [x * this.W, y * this.H]);
+          this.setShape(this._shape);
+        }
+        return;
+      }
+      for (const ev of evs) { const [x, y] = this.norm(ev); this.addPt(x, y, ev); }
+      // ci si è mossi: ricomincia ad aspettare la pausa che trasforma il tratto in forma
+      if (Math.hypot(e.clientX - this._holdAt[0], e.clientY - this._holdAt[1]) > 5) { this._holdAt = [e.clientX, e.clientY]; this.armHold(); }
+      this.paintLive();
+    }
     else if (g === 'erase') { for (const ev of evs) { const [x, y] = this.norm(ev); this.eraseAt(x, y); } }
     else if (g === 'lasso') { for (const ev of evs) { const [x, y] = this.norm(ev); this.lasso.push(x * this.W, y * this.H); } this.paintLasso(); }
     else if (g === 'move') { const [x, y] = this.norm(e); this.translateSel(x - this._last[0], y - this._last[1]); this._last = [x, y]; }
@@ -509,6 +656,10 @@ export class InkSurface {
     const g = this.gesture;
     this.gesture = null;
     if (g === 'draw') {
+      clearTimeout(this._ht);
+      // modalità Forme: ogni tratto riconosciuto diventa una forma perfetta
+      if (!this._shape && tools.shapes && this.cur) { const sh = recognizeShape(this.strokePx()); if (sh) this.setShape(sh); }
+      this._shape = null;
       const s = this.cur;
       this.cur = null;
       cancelAnimationFrame(this._lr); this._lr = 0;
@@ -534,10 +685,37 @@ export class InkSurface {
   cancelGesture() {
     const g = this.gesture;
     this.gesture = null;
+    clearTimeout(this._ht); this._shape = null;
     if (g === 'draw') { this.cur = null; cancelAnimationFrame(this._lr); this._lr = 0; this.clearLive(); }
     else if (g === 'lasso') { this.lasso = null; this.clearLive(); }
     else if (g === 'erase') { this.clearLive(); if (this._erased) this.emit(); }
     else if (g === 'move' || g === 'scale') { if (this._before !== this.snap()) { this.pushUndo(this._before); this.emit(); } this.drawSel(); this.showSelMenu(); }
+  }
+  // Tieni ferma la penna alla fine del tratto → diventa linea dritta o forma
+  armHold() {
+    clearTimeout(this._ht);
+    this._ht = setTimeout(() => {
+      if (this.gesture !== 'draw' || !this.cur || this._shape) return;
+      const sh = recognizeShape(this.strokePx());
+      if (!sh) return;
+      this._shape = sh;
+      this.setShape(sh);
+      try { navigator.vibrate && navigator.vibrate(10); } catch { /* ignore */ }
+    }, 550);
+  }
+  strokePx() {
+    const p = this.cur.p, out = [];
+    for (let i = 0; i < p.length; i += 3) out.push([p[i] * this.W, p[i + 1] * this.H]);
+    return out;
+  }
+  setShape(sh) {
+    const p = this.cur.p;
+    let pr = 0, n = 0;
+    for (let i = 2; i < p.length; i += 3) { pr += p[i]; n++; }
+    pr = n ? Math.round(pr / n * 100) / 100 : 0.5;
+    this.cur.p = [];
+    for (const [x, y] of shapePoints(sh)) this.cur.p.push(R5(x / this.W), R5(y / this.H), pr);
+    this.paintLive();
   }
   paintLive() {
     if (this._lr) return;
@@ -1026,6 +1204,13 @@ export function inkToolbar({ compact = false, lasso = true, text = true, hand = 
     if (toolBtns[0]) toolBtns[0].replaceChildren(icon('pen_' + tools.penStyle));
     const parts = [];
     if (t === 'pen') parts.push(styleGroup());
+    if (t === 'pen' || t === 'highlighter') {
+      const tip = 'Forme: ogni tratto diventa una forma perfetta (linea, cerchio, rettangolo, triangolo…). Anche senza, tieni ferma la penna alla fine del tratto per raddrizzarlo.';
+      parts.push(h('button', {
+        class: 'tool-btn tb-shapes' + (tools.shapes ? ' active' : ''), type: 'button', title: tip, 'aria-label': 'Forme', 'aria-pressed': String(!!tools.shapes),
+        onclick: () => { tools.set({ shapes: !tools.shapes }); toast(tools.shapes ? 'Forme attive: i tratti diventano forme perfette' : 'Forme disattivate (tieni ferma la penna per una forma singola)', { ms: 2200 }); },
+      }, icon('shapes')));
+    }
     if (t !== 'eraser' && t !== 'hand') parts.push(colorGroup(t === 'highlighter' ? 'highlighter' : 'pen', dark));
     if (SIZES[t]) parts.push(sizeGroup(t));
     if (t === 'eraser') parts.push(eraserModeGroup());
