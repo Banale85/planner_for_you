@@ -24,7 +24,8 @@ Calendario in stile Microsoft Teams + quaderni per appunti in stile Noteful, con
 - Cartelle e sottocartelle illimitate, colori, trascinamento, "Sposta in…", ricerca, Recenti
 - Quaderni con copertina e carta bianca / a righe / quadretti / puntini / Cornell
 - Penna sensibile alla pressione, evidenziatore, gomma, lazo (sposta, ridimensiona, duplica, ricolora), testo, immagini
-- **Forme**: tieni ferma la penna alla fine del tratto e diventa una linea dritta, un cerchio, un rettangolo, un triangolo…; con il pulsante "Forme" acceso ogni tratto diventa una forma
+- **Forme**: tieni ferma la penna un istante alla fine del tratto e diventa linea dritta (si blocca ogni 45°), freccia, arco, freccia curva, spezzata, cerchio, ellisse, rettangolo, triangolo o poligono; con il pulsante "Forme" acceso ogni tratto diventa una forma
+- Forme modificabili: maniglie blu per spostare un singolo punto, "+" per aggiungere punti, maniglia per ruotare; menu Stile (colore, linea continua/tratteggiata/puntinata, spessore, frecce), Duplica, Togli punto, Elimina. Col lazo tocca una forma per riprenderla
 - Tocca con **2 dita** per annullare e con **3 dita** per ripetere
 - Importa PDF da annotare, esporta in PDF o immagine
 - Pagine: aggiungi, duplica, riordina, elimina; zoom con due dita o Ctrl+rotellina
