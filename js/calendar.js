@@ -14,7 +14,10 @@ import { cats, catOf, catColor, isCream, catHex, loadCats, addCat, catDialog, MA
 // classe CSS degli eventi senza colore (bianco panna)
 const creamCls = id => (isCream(id) ? ' cream' : '');
 const HOUR = 48;
-const VIEWS = { day: 'Giorno', workweek: 'Settimana lavorativa', week: 'Settimana', month: 'Mese', agenda: 'Agenda' };
+const VIEWS = { day: 'Giorno', workweek: 'Settimana lavorativa', week: 'Settimana', month: 'Mese', year: 'Anno', agenda: 'Agenda' };
+// etichette brevi per i pulsanti delle viste, con la scorciatoia da tastiera
+const VIEW_BTNS = [['day', 'Giorno', '1'], ['workweek', 'Lavorativa', '2'], ['week', 'Settimana', '3'], ['month', 'Mese', '4'], ['year', 'Anno', '5'], ['agenda', 'Agenda', '6']];
+const TIME_VIEWS = new Set(['day', 'workweek', 'week']);
 const SHOW_AS = [['busy', 'Occupato'], ['free', 'Libero'], ['tentative', 'Provvisorio'], ['oof', 'Fuori sede']];
 const REMINDERS = [['', 'Nessun promemoria'], ['0', 'All\'inizio'], ['5', '5 minuti prima'], ['15', '15 minuti prima'], ['30', '30 minuti prima'], ['60', '1 ora prima'], ['1440', '1 giorno prima']];
 
@@ -85,12 +88,14 @@ function rangeFor(view, date) {
     case 'workweek': return { from: startOfWeek(date), days: 5 };
     case 'week': return { from: startOfWeek(date), days: 7 };
     case 'month': return { from: startOfWeek(new Date(date.getFullYear(), date.getMonth(), 1)), days: 42 };
+    case 'year': { const y = date.getFullYear(); return { from: new Date(y, 0, 1), days: Math.round((new Date(y + 1, 0, 1) - new Date(y, 0, 1)) / 864e5) }; }
     default: return { from: startOfDay(date), days: 30 };
   }
 }
 function rangeLabel(view, from, days) {
   if (view === 'day') return cap(fmt.full(from));
   if (view === 'month') return cap(fmt.monthYear(st.date));
+  if (view === 'year') return String(st.date.getFullYear());
   const to = addDays(from, days - 1);
   if (from.getMonth() === to.getMonth()) return `${from.getDate()}–${to.getDate()} ${fmt.monthYear(to)}`;
   if (from.getFullYear() === to.getFullYear()) return `${fmt.dayMonth(from)} – ${fmt.dayMonth(to)} ${to.getFullYear()}`;
@@ -106,6 +111,113 @@ function tapDetect(e, fn) {
   const clean = () => { removeEventListener('pointerup', up); removeEventListener('pointercancel', cancel); };
   addEventListener('pointerup', up);
   addEventListener('pointercancel', cancel);
+}
+
+// ---------- Trascinamento con mouse, penna e dito ----------
+// Mentre un evento viene trascinato blocchiamo lo scorrimento della pagina (serve su iPad,
+// dove sia il dito sia Apple Pencil farebbero scorrere la griglia invece di spostare l'evento).
+let dragLock = false, lastDragAt = 0;
+document.addEventListener('touchmove', e => { if (dragLock && e.cancelable) e.preventDefault(); }, { passive: false });
+
+// Mouse e penna trascinano subito; con il dito si tiene premuto un attimo e poi si trascina
+// (un movimento rapido del dito continua a far scorrere il calendario).
+// Restituisce una funzione che interrompe il gesto.
+function pressDrag(e, { onTap, onArm, onStart, onMove, onEnd }) {
+  const id = e.pointerId, touch = e.pointerType === 'touch', sx = e.clientX, sy = e.clientY, t0 = Date.now();
+  const minMove = e.pointerType === 'pen' ? 10 : 5;
+  let armed = !touch, dragging = false, ended = false, timer = 0;
+  if (armed) dragLock = true;
+  else timer = setTimeout(() => { armed = true; dragLock = true; try { navigator.vibrate && navigator.vibrate(12); } catch { /* ignore */ } onArm && onArm(); }, 380);
+  const dist = ev => Math.hypot(ev.clientX - sx, ev.clientY - sy);
+  const move = ev => {
+    if (ev.pointerId !== id) return;
+    if (!armed) { if (dist(ev) > 10) finish(null); return; }
+    if (!dragging) { if (dist(ev) < minMove) return; dragging = true; lastDragAt = Date.now(); onStart && onStart(ev); }
+    lastDragAt = Date.now();
+    onMove && onMove(ev);
+  };
+  const up = ev => { if (ev.pointerId === id) finish(ev); };
+  const cancel = ev => { if (ev.pointerId === id) finish(null); };
+  function finish(ev) {
+    if (ended) return;
+    ended = true;
+    clearTimeout(timer); dragLock = false;
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', cancel);
+    if (dragging) { lastDragAt = Date.now(); onEnd && onEnd(ev); return; }
+    if (armed && onEnd) onEnd(null); // sollevato senza muoversi dopo la pressione lunga
+    if (ev && dist(ev) < 12 && (armed || Date.now() - t0 < 700)) onTap && onTap();
+  }
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', cancel);
+  return () => finish(null);
+}
+
+// ---------- Mini calendario (giorni → mesi → anni) ----------
+const isoWeek = d => {
+  const t = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 3 - ((d.getDay() + 6) % 7));
+  const w1 = new Date(t.getFullYear(), 0, 4);
+  return 1 + Math.round(((t - w1) / 864e5 - 3 + ((w1.getDay() + 6) % 7)) / 7);
+};
+const MONTHS_SHORT = Array.from({ length: 12 }, (_, i) => cap(new Date(2000, i, 1).toLocaleDateString('it-IT', { month: 'short' }).replace('.', '')));
+
+// onPick(tipo, data): tipo = 'day' | 'week' | 'month' | 'year'
+function miniCal({ events = [], onPick }) {
+  const root = h('div', { class: 'mini' });
+  let level = 'days', cur = new Date(st.date.getFullYear(), st.date.getMonth(), 1);
+  const now = () => new Date();
+  function render() {
+    let title, shift, body;
+    if (level === 'days') {
+      title = cap(fmt.monthYear(cur));
+      shift = n => { cur = new Date(cur.getFullYear(), cur.getMonth() + n, 1); };
+      const { from, days } = rangeFor(st.view, st.date), rEnd = addDays(from, days);
+      const start = startOfWeek(cur), n = now();
+      const busy = new Set(expand(events, start, addDays(start, 42)).map(o => ymd(o.start)));
+      body = h('div', { class: 'mini-grid' });
+      body.append(h('div', { class: 'wd wk-h', title: 'Settimana' }, 'S'));
+      for (let i = 0; i < 7; i++) body.append(h('div', { class: 'wd' }, fmt.wdShort(addDays(start, i)).charAt(0).toUpperCase()));
+      for (let w = 0; w < 6; w++) {
+        const ws = addDays(start, w * 7);
+        const wkSel = (st.view === 'week' || st.view === 'workweek') && sameDay(ws, from);
+        body.append(h('button', { class: 'wk' + (wkSel ? ' sel' : ''), title: `Vai alla settimana ${isoWeek(ws)}`, 'aria-label': `Settimana ${isoWeek(ws)}`, onclick: () => onPick('week', ws) }, isoWeek(ws)));
+        for (let i = 0; i < 7; i++) {
+          const d = addDays(ws, i);
+          const cls = [d.getMonth() !== cur.getMonth() && 'other', TIME_VIEWS.has(st.view) && d >= from && d < rEnd && 'inrange',
+            sameDay(d, n) && 'today', sameDay(d, st.date) && 'sel', busy.has(ymd(d)) && 'busy'].filter(Boolean).join(' ');
+          body.append(h('button', { class: 'day ' + cls, 'aria-label': fmt.full(d), onclick: () => onPick('day', d) }, d.getDate()));
+        }
+      }
+    } else if (level === 'months') {
+      const y = cur.getFullYear(), n = now();
+      title = String(y);
+      shift = k => { cur = new Date(y + k, cur.getMonth(), 1); };
+      body = h('div', { class: 'mini-grid big' },
+        MONTHS_SHORT.map((m, i) => h('button', {
+          class: [y === n.getFullYear() && i === n.getMonth() && 'today', y === st.date.getFullYear() && i === st.date.getMonth() && 'sel'].filter(Boolean).join(' '),
+          onclick: () => { cur = new Date(y, i, 1); level = 'days'; onPick('month', cur); },
+        }, m)));
+      body = h('div', {}, body, h('button', { class: 'btn sm mini-year', onclick: () => onPick('year', new Date(y, 0, 1)) }, icon('calendar'), `Vedi tutto il ${y}`));
+    } else {
+      const y0 = cur.getFullYear() - 4, n = now();
+      title = `${y0} – ${y0 + 11}`;
+      shift = k => { cur = new Date(cur.getFullYear() + 12 * k, cur.getMonth(), 1); };
+      body = h('div', { class: 'mini-grid big' },
+        Array.from({ length: 12 }, (_, i) => y0 + i).map(y => h('button', {
+          class: [y === n.getFullYear() && 'today', y === st.date.getFullYear() && 'sel'].filter(Boolean).join(' '),
+          onclick: () => { cur = new Date(y, cur.getMonth(), 1); level = 'months'; render(); },
+        }, y)));
+    }
+    const next = { days: 'months', months: 'years', years: 'days' }[level];
+    root.replaceChildren(
+      h('div', { class: 'mini-head' },
+        h('button', { class: 'mini-title', title: level === 'days' ? 'Scegli mese e anno' : level === 'months' ? "Scegli l'anno" : 'Torna ai giorni', onclick: () => { level = next; render(); } },
+          title, icon(level === 'years' ? 'chevL' : 'chevD')),
+        h('div', { class: 'mini-arrows' },
+          h('button', { class: 'icon-btn sm', 'aria-label': 'Precedente', onclick: () => { shift(-1); render(); } }, icon('chevL')),
+          h('button', { class: 'icon-btn sm', 'aria-label': 'Successivo', onclick: () => { shift(1); render(); } }, icon('chevR')))),
+      body);
+  }
+  render();
+  return root;
 }
 
 // ---------- Import / export ----------
@@ -339,11 +451,58 @@ export function openEditor(o, preset, onSaved) {
 // =====================================================================
 export async function renderCalendar(host) {
   const wrap = h('div', { class: 'cal' + (st.writing ? ' writing' : '') });
-  let overlay = null, timers = [], destroyed = false, miniMonth = null;
+  let overlay = null, timers = [], destroyed = false, allEvents = [], stopDrag = () => {};
 
-  const rangeLbl = h('div', { class: 'cal-range' });
-  const viewSel = h('select', { class: 'input sm view-sel', 'aria-label': 'Vista', onchange: () => { st.view = viewSel.value; try { localStorage.setItem('pfy-view', st.view); } catch { /* ignore */ } draw(); } },
+  const setView = v => { st.view = v; try { localStorage.setItem('pfy-view', v); } catch { /* ignore */ } };
+  const rangeTxt = h('span', {});
+  const rangeLbl = h('button', { class: 'cal-range', title: 'Scegli una data', 'aria-haspopup': 'dialog', onclick: () => openPicker() }, rangeTxt, icon('chevD'));
+  const viewSel = h('select', { class: 'input sm view-sel', 'aria-label': 'Vista', onchange: () => { setView(viewSel.value); draw(); } },
     Object.entries(VIEWS).map(([k, v]) => h('option', { value: k }, v)));
+  const viewSeg = h('div', { class: 'view-seg', role: 'tablist', 'aria-label': 'Vista' },
+    VIEW_BTNS.map(([k, label, key]) => h('button', { role: 'tab', 'data-v': k, title: `${VIEWS[k]} (${key})`, onclick: () => { if (st.writing && (k === 'agenda' || k === 'year')) return; setView(k); draw(); } }, label)));
+  // pannello laterale: su schermi larghi si può nascondere, su quelli stretti si apre sopra il calendario
+  const narrow = () => innerWidth < 900;
+  let sideOff = false;
+  try { sideOff = localStorage.getItem('pfy-cal-side') === '0'; } catch { /* ignore */ }
+  const sideBtn = h('button', { class: 'icon-btn', title: 'Mostra / nascondi il mini calendario', 'aria-label': 'Mini calendario', onclick: () => toggleSide() }, icon('sidebar'));
+  function toggleSide(v) {
+    if (narrow()) { wrap.classList.toggle('side-open', v === undefined ? !wrap.classList.contains('side-open') : v); return; }
+    sideOff = v === undefined ? !sideOff : !v;
+    wrap.classList.toggle('side-off', sideOff);
+    try { localStorage.setItem('pfy-cal-side', sideOff ? '0' : '1'); } catch { /* ignore */ }
+  }
+  wrap.classList.toggle('side-off', sideOff);
+
+  // scelta dal mini calendario
+  function pick(kind, d) {
+    if (kind === 'day') {
+      // secondo tocco sullo stesso giorno, oppure da Mese/Anno → vista Giorno
+      if (sameDay(d, st.date) || st.view === 'month' || st.view === 'year') setView('day');
+      st.date = startOfDay(d);
+    } else if (kind === 'week') { setView(st.view === 'workweek' ? 'workweek' : 'week'); st.date = d; }
+    else if (kind === 'month') { setView('month'); st.date = d; }
+    else if (kind === 'year') { setView('year'); st.date = d; }
+    if (st.writing && (st.view === 'agenda' || st.view === 'year')) setView('week');
+    st.scrollTop = null;
+    if (narrow()) wrap.classList.remove('side-open');
+    draw();
+  }
+  let picker = null;
+  function closePicker() { if (!picker) return; picker.el.remove(); document.removeEventListener('pointerdown', picker.off, true); picker = null; }
+  function openPicker() {
+    if (picker) { closePicker(); return; }
+    const el = h('div', { class: 'popmenu cal-pop', role: 'dialog', 'aria-label': 'Scegli una data' },
+      miniCal({ events: allEvents, onPick: (k, d) => { closePicker(); pick(k, d); } }),
+      h('div', { class: 'cal-pop-foot' },
+        h('button', { class: 'btn sm', onclick: () => { closePicker(); st.date = startOfDay(new Date()); st.scrollTop = null; draw(); } }, 'Oggi')));
+    document.body.append(el);
+    const r = rangeLbl.getBoundingClientRect();
+    el.style.left = Math.max(8, Math.min(r.left, innerWidth - el.offsetWidth - 8)) + 'px';
+    el.style.top = Math.min(r.bottom + 4, innerHeight - el.offsetHeight - 8) + 'px';
+    const off = e => { if (!el.contains(e.target) && !rangeLbl.contains(e.target)) closePicker(); };
+    setTimeout(() => document.addEventListener('pointerdown', off, true));
+    picker = { el, off };
+  }
   const writeBtn = h('button', { class: 'btn write-btn', title: 'Scrivi a penna o con la tastiera sul calendario', onclick: () => toggleWrite() }, icon('pen'), h('span', { class: 'hide-sm' }, 'Scrivi'));
   const newBtn = h('button', { class: 'btn primary', onclick: () => { const s = nextHalfHour(); const d = sameDay(s, st.date) || st.view !== 'day' ? s : new Date(st.date.getFullYear(), st.date.getMonth(), st.date.getDate(), 9); openEditor(null, { start: d, end: new Date(d.getTime() + 30 * 60000) }, draw); } }, icon('plus'), h('span', {}, 'Nuova riunione'));
   const head = h('div', { class: 'topbar' },
@@ -358,10 +517,11 @@ export async function renderCalendar(host) {
     }, icon('more')),
     newBtn);
   const nav = h('div', { class: 'cal-nav' },
-    h('button', { class: 'btn', onclick: () => { st.date = startOfDay(new Date()); st.scrollTop = null; draw(); } }, icon('calendar'), 'Oggi'),
-    h('button', { class: 'icon-btn', title: 'Precedente', 'aria-label': 'Precedente', onclick: () => step(-1) }, icon('chevL')),
-    h('button', { class: 'icon-btn', title: 'Successivo', 'aria-label': 'Successivo', onclick: () => step(1) }, icon('chevR')),
-    rangeLbl, h('div', { class: 'grow' }), viewSel);
+    sideBtn,
+    h('button', { class: 'btn', title: 'Vai a oggi (T)', onclick: () => { st.date = startOfDay(new Date()); st.scrollTop = null; draw(); } }, 'Oggi'),
+    h('button', { class: 'icon-btn', title: 'Precedente (←)', 'aria-label': 'Precedente', onclick: () => step(-1) }, icon('chevL')),
+    h('button', { class: 'icon-btn', title: 'Successivo (→)', 'aria-label': 'Successivo', onclick: () => step(1) }, icon('chevR')),
+    rangeLbl, h('div', { class: 'grow' }), viewSeg, viewSel);
   const calTb = inkToolbar({});
   const inkRow = h('div', { class: 'cal-inkbar' },
     calTb,
@@ -377,12 +537,17 @@ export async function renderCalendar(host) {
     const d = st.date;
     if (st.view === 'day') st.date = addDays(d, dir);
     else if (st.view === 'month') st.date = new Date(d.getFullYear(), d.getMonth() + dir, 1);
+    else if (st.view === 'year') st.date = new Date(d.getFullYear() + dir, 0, 1);
+    else if (st.view === 'agenda') st.date = addDays(d, 30 * dir);
     else st.date = addDays(d, 7 * dir);
+    main.classList.remove('slide-l', 'slide-r');
+    void main.offsetWidth;
+    main.classList.add(dir > 0 ? 'slide-l' : 'slide-r');
     draw();
   }
   function toggleWrite(v) {
     st.writing = v === undefined ? !st.writing : v;
-    if (st.writing && st.view === 'agenda') { st.view = 'week'; draw(); }
+    if (st.writing && (st.view === 'agenda' || st.view === 'year')) { setView('week'); draw(); }
     wrap.classList.toggle('writing', st.writing);
     inkRow.hidden = !st.writing;
     writeBtn.classList.toggle('active', st.writing);
@@ -403,24 +568,105 @@ export async function renderCalendar(host) {
     if (destroyed) return;
     if (overlay) { overlay.flush(); overlay.destroy(); overlay = null; }
     timers.forEach(clearInterval); timers = [];
-    miniMonth = null;
+    stopDrag(); stopDrag = () => {};
     viewSel.value = st.view;
+    for (const b of viewSeg.children) { const on = b.dataset.v === st.view; b.classList.toggle('active', on); b.setAttribute('aria-selected', on); }
     const { from, days } = rangeFor(st.view, st.date);
     const events = await db.all('events');
     if (destroyed) return;
+    allEvents = events;
     const occs = expand(events, from, addDays(from, days));
-    rangeLbl.textContent = rangeLabel(st.view, from, days);
+    rangeTxt.textContent = rangeLabel(st.view, from, days);
     main.replaceChildren();
     if (st.view === 'month') drawMonth(from, occs);
+    else if (st.view === 'year') drawYear(occs);
     else if (st.view === 'agenda') drawAgenda(from, days, occs);
     else drawTimeGrid(from, days, occs);
     drawMini();
   }
 
+  // Sposta un evento (anche ricorrente) e offre "Annulla"
+  async function moveEvent(o, ns, ne) {
+    const ev = o.ev, now = Date.now();
+    const before = JSON.parse(JSON.stringify(ev));
+    let created = null;
+    if (ev.rrule) {
+      const v = await chooseDialog('Sposta evento ricorrente', `Vuoi spostare solo l'occorrenza del ${fmt.dayMonth(o.start)} o tutta la serie?`, [
+        { label: 'Solo questa', value: 'one' },
+        { label: 'Tutta la serie', value: 'all', primary: true },
+      ]);
+      if (!v) { draw(); return; }
+      if (v === 'one') {
+        created = { ...JSON.parse(JSON.stringify(ev)), id: uid(), rrule: null, exdates: [], start: toLocalISO(ns), end: toLocalISO(ne), createdAt: now, updatedAt: now };
+        await db.put('events', { ...ev, exdates: [...(ev.exdates || []), ymd(o.start)], updatedAt: now });
+        await db.put('events', created);
+      } else {
+        const dd = Math.round((startOfDay(ns) - startOfDay(o.start)) / 864e5);
+        const ns0 = addDays(parseLocal(ev.start), dd); ns0.setHours(ns.getHours(), ns.getMinutes());
+        const ne0 = new Date(ns0.getTime() + (ne - ns));
+        const r = { ...ev.rrule };
+        if (r.byDay && dd) r.byDay = r.byDay.map(x => (((x + dd) % 7) + 7) % 7);
+        const exdates = (ev.exdates || []).map(x => ymd(addDays(parseLocal(x), dd)));
+        await db.put('events', { ...ev, rrule: r, exdates, start: toLocalISO(ns0), end: toLocalISO(ne0), updatedAt: now });
+      }
+    } else {
+      await db.put('events', { ...ev, start: toLocalISO(ns), end: toLocalISO(ne), updatedAt: now });
+    }
+    await draw();
+    const when = o.ev.allDay || st.view === 'month' ? fmt.dayMonth(ns) : `${cap(fmt.wdShort(ns))} ${ns.getDate()}, ${hm(ns)}`;
+    toast(`Spostato: ${when}`, {
+      ms: 5000,
+      action: {
+        label: 'Annulla', onClick: async () => {
+          await db.put('events', { ...before, updatedAt: Date.now() });
+          if (created) await db.del('events', created.id);
+          draw();
+        },
+      },
+    });
+  }
+
   const chip = (o, withTime) => {
     const c = h('div', { class: 'chip' + creamCls(o.ev.category), style: { '--c': catColor(o.ev.category) }, title: o.ev.title },
       withTime && !o.ev.allDay ? h('b', {}, hm(o.start) + ' ') : null, o.ev.title || '(Senza titolo)');
-    c.addEventListener('click', e => { e.stopPropagation(); if (!st.writing) openEditor(o, null, draw); });
+    // il clic non deve arrivare alla cella (che creerebbe un nuovo evento)
+    c.addEventListener('click', e => e.stopPropagation());
+    c.addEventListener('contextmenu', e => e.preventDefault());
+    c.addEventListener('pointerdown', e => {
+      if (st.writing || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      e.stopPropagation();
+      if (e.pointerType === 'mouse') e.preventDefault();
+      const kind = c.closest('.mv-cell') ? '.mv-cell' : '.tg-allday .cell';
+      const src = c.closest(kind);
+      let ghost = null, target = null, ox = 0, oy = 0;
+      const setTarget = cell => { if (cell === target) return; if (target) target.classList.remove('drop-target'); target = cell; if (cell) cell.classList.add('drop-target'); };
+      stopDrag = pressDrag(e, {
+        onTap: () => openEditor(o, null, draw),
+        onArm: () => c.classList.add('lifted'),
+        onStart: ev => {
+          const r = c.getBoundingClientRect();
+          ox = ev.clientX - r.left; oy = ev.clientY - r.top;
+          ghost = c.cloneNode(true);
+          ghost.classList.add('chip-ghost');
+          Object.assign(ghost.style, { width: r.width + 'px', left: r.left + 'px', top: r.top + 'px' });
+          document.body.append(ghost);
+          c.classList.add('drag-src');
+        },
+        onMove: ev => {
+          ghost.style.left = ev.clientX - ox + 'px'; ghost.style.top = ev.clientY - oy + 'px';
+          const under = document.elementFromPoint(ev.clientX, ev.clientY);
+          setTarget(under && under.closest(kind));
+        },
+        onEnd: ev => {
+          if (ghost) ghost.remove();
+          const t = target; setTarget(null);
+          c.classList.remove('drag-src', 'lifted');
+          if (!ev || !t || !t._day || !src || !src._day) return;
+          const dd = Math.round((t._day - src._day) / 864e5);
+          if (dd) moveEvent(o, addDays(o.start, dd), addDays(o.end, dd));
+        },
+      });
+    });
     return c;
   };
 
@@ -435,6 +681,7 @@ export async function renderCalendar(host) {
     const allday = h('div', { class: 'tg-row tg-allday' }, h('div', { class: 'tg-gutter' }),
       days.map(d => {
         const cell = h('div', { class: 'cell' });
+        cell._day = d;
         const dEnd = addDays(d, 1);
         for (const o of occs) if (o.ev.allDay && o.start < dEnd && o.end > d) cell.append(chip(o));
         cell.addEventListener('click', () => { if (!st.writing) openEditor(null, { start: d, end: dEnd, allDay: true }, draw); });
@@ -504,23 +751,17 @@ export async function renderCalendar(host) {
         h('div', { class: 'ev-title' }, o.ev.meetingUrl ? icon('video', 'ev-ic') : null, o.ev.rrule ? icon('repeat', 'ev-ic') : null, o.ev.notebookId ? icon('notes', 'ev-ic') : null, o.ev.title || '(Senza titolo)'),
         meta,
         o.ev.rrule ? null : h('div', { class: 'ev-resize' }));
+      el.addEventListener('contextmenu', e => e.preventDefault());
       el.addEventListener('pointerdown', e => {
-        if (st.writing) return;
+        if (st.writing || (e.pointerType === 'mouse' && e.button !== 0)) return;
         e.stopPropagation();
-        if (e.pointerType === 'touch') { tapDetect(e, () => openEditor(o, null, draw)); return; }
-        if (e.button !== 0) return;
-        e.preventDefault();
+        if (e.pointerType === 'mouse') e.preventDefault();
         const resize = e.target.classList.contains('ev-resize');
-        const sx = e.clientX, sy = e.clientY, origIdx = cols.indexOf(col), dur = o.end - o.start;
-        colRects = null;
-        let dragging = false, ns = o.start, ne = o.end;
-        // con la penna la mano trema un po' durante un tocco: serve un movimento più ampio per trascinare
-        const minMove = e.pointerType === 'pen' ? 12 : 5;
-        const move = ev => {
-          if (!dragging && Math.hypot(ev.clientX - sx, ev.clientY - sy) < minMove) return;
-          if (o.ev.rrule) return;
-          dragging = true; el.classList.add('dragging');
-          const dmin = Math.round((ev.clientY - sy) / HOUR * 4) * 15;
+        const sy = e.clientY, st0 = scroller.scrollTop, origIdx = cols.indexOf(col), dur = o.end - o.start;
+        let ns = o.start, ne = o.end, last = e, raf = 0;
+        const apply = ev => {
+          // anche lo scorrimento automatico conta come spostamento
+          const dmin = Math.round((ev.clientY - sy + scroller.scrollTop - st0) / HOUR * 4) * 15;
           if (resize) {
             ne = new Date(Math.max(o.start.getTime() + 15 * 60000, o.end.getTime() + dmin * 60000));
             el.style.height = Math.max((ne - Math.max(o.start, col._day)) / 3600000 * HOUR - 2, 18) + 'px';
@@ -532,20 +773,27 @@ export async function renderCalendar(host) {
           }
           meta.textContent = `${hm(ns)} – ${hm(ne)}`;
         };
-        const up = async () => {
-          removeEventListener('pointermove', move); removeEventListener('pointerup', up); cleanupDrag = null;
-          // nessuno spostamento reale: è un tocco, apre l'evento per modificarlo o eliminarlo
-          if (!dragging || (+ns === +o.start && +ne === +o.end)) {
-            el.style.transform = ''; el.classList.remove('dragging');
-            openEditor(o, null, draw);
-            return;
-          }
-          const updated = { ...o.ev, start: toLocalISO(ns), end: toLocalISO(ne), updatedAt: Date.now() };
-          await db.put('events', updated);
-          draw();
+        // vicino ai bordi la griglia scorre da sola
+        const autoScroll = () => {
+          // solo se ci si è spostati verso quel bordo (afferrare un evento già vicino al bordo non deve far scorrere)
+          const r = scroller.getBoundingClientRect(), y = last.clientY, edge = 44;
+          const v = y < r.top + edge && y < sy - 12 ? -(r.top + edge - y) : y > r.bottom - edge && y > sy + 12 ? y - (r.bottom - edge) : 0;
+          if (v) { const before = scroller.scrollTop; scroller.scrollTop += Math.sign(v) * Math.min(18, Math.ceil(Math.abs(v) / 3)); if (scroller.scrollTop !== before) apply(last); }
+          raf = requestAnimationFrame(autoScroll);
         };
-        addEventListener('pointermove', move); addEventListener('pointerup', up);
-        cleanupDrag = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+        const reset = () => { el.style.transform = ''; el.classList.remove('dragging', 'lifted'); meta.textContent = `${hm(o.start)} – ${hm(o.end)}`; };
+        stopDrag = pressDrag(e, {
+          onTap: () => openEditor(o, null, draw),
+          onArm: () => el.classList.add('lifted'),
+          onStart: () => { colRects = null; el.classList.add('dragging'); raf = requestAnimationFrame(autoScroll); },
+          onMove: ev => { last = ev; apply(ev); },
+          onEnd: ev => {
+            cancelAnimationFrame(raf);
+            if (!ev || (+ns === +o.start && +ne === +o.end)) { reset(); return; }
+            el.classList.remove('lifted');
+            moveEvent(o, ns, ne);
+          },
+        });
       });
       return el;
     }
@@ -561,7 +809,6 @@ export async function renderCalendar(host) {
     mountOverlay(ov, `${st.view}|${ymd(from)}`);
     stopDrag = () => cleanupDrag && cleanupDrag();
   }
-  let stopDrag = () => {};
 
   function layoutDay(items) {
     items.sort((a, b) => a.s - b.s || b.e - a.e);
@@ -598,6 +845,7 @@ export async function renderCalendar(host) {
         h('button', { class: 'mv-num', onclick: e => { e.stopPropagation(); if (st.writing) return; st.view = 'day'; st.date = d; draw(); } }, d.getDate() === 1 ? `${d.getDate()} ${fmt.dayMonthShort(d).split(' ')[1]}` : d.getDate()),
         list.slice(0, max).map(o => chip(o, true)),
         list.length > max ? h('button', { class: 'mv-more', onclick: e => { e.stopPropagation(); st.view = 'day'; st.date = d; draw(); } }, `+${list.length - max} altri`) : null);
+      cell._day = d;
       cell.addEventListener('click', () => { if (st.writing) return; const s = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9); openEditor(null, { start: s, end: new Date(s.getTime() + 30 * 60000) }, draw); });
       gridEl.append(cell);
     }
@@ -635,29 +883,49 @@ export async function renderCalendar(host) {
     main.append(list);
   }
 
+  // ----- Anno: 12 mesi, tocca un giorno per aprirlo -----
+  function drawYear(occs) {
+    const y = st.date.getFullYear(), now = new Date();
+    const count = new Map();
+    for (const o of occs) { const k = ymd(o.start); count.set(k, (count.get(k) || 0) + 1); }
+    const wrapY = h('div', { class: 'yv' });
+    for (let mI = 0; mI < 12; mI++) {
+      const first = new Date(y, mI, 1), start = startOfWeek(first);
+      const grid = h('div', { class: 'mini-grid yv-grid' });
+      for (let i = 0; i < 7; i++) grid.append(h('div', { class: 'wd' }, fmt.wdShort(addDays(start, i)).charAt(0).toUpperCase()));
+      for (let i = 0; i < 42; i++) {
+        const d = addDays(start, i);
+        if (d.getMonth() !== mI) { grid.append(h('span', {})); continue; }
+        const n = count.get(ymd(d)) || 0;
+        grid.append(h('button', {
+          class: 'day' + (sameDay(d, now) ? ' today' : '') + (n ? ' busy' : ''),
+          title: n ? `${fmt.full(d)} · ${n} event${n > 1 ? 'i' : 'o'}` : fmt.full(d),
+          onclick: () => { setView('day'); st.date = d; st.scrollTop = null; draw(); },
+        }, d.getDate()));
+      }
+      wrapY.append(h('div', { class: 'yv-month' + (y === now.getFullYear() && mI === now.getMonth() ? ' current' : '') },
+        h('button', { class: 'yv-title', title: 'Apri il mese', onclick: () => { setView('month'); st.date = first; draw(); } }, cap(first.toLocaleDateString('it-IT', { month: 'long' }))),
+        grid));
+    }
+    main.append(wrapY);
+  }
+
   // ----- Mini calendario laterale -----
   function drawMini() {
-    const m = miniMonth || new Date(st.date.getFullYear(), st.date.getMonth(), 1);
-    const { from, days } = rangeFor(st.view, st.date);
-    const rEnd = addDays(from, days), now = new Date(), start = startOfWeek(m);
-    const grid = h('div', { class: 'mini-grid' });
-    for (let i = 0; i < 7; i++) grid.append(h('div', { class: 'wd' }, fmt.wdShort(addDays(start, i)).charAt(0).toUpperCase()));
-    for (let i = 0; i < 42; i++) {
-      const d = addDays(start, i);
-      const inRange = st.view !== 'month' && st.view !== 'agenda' && d >= from && d < rEnd;
-      grid.append(h('button', {
-        class: (d.getMonth() !== m.getMonth() ? 'other ' : '') + (inRange ? 'inrange ' : '') + (sameDay(d, now) ? 'today' : ''),
-        onclick: () => { st.date = d; draw(); }, 'aria-label': fmt.full(d),
-      }, d.getDate()));
-    }
+    const today = startOfDay(new Date());
+    const jump = (label, fn) => h('button', { class: 'jump-btn', onclick: fn }, label);
     side.replaceChildren(
-      h('div', { class: 'mini' },
-        h('div', { class: 'mini-head' },
-          h('span', {}, cap(fmt.monthYear(m))),
-          h('div', {},
-            h('button', { class: 'icon-btn sm', 'aria-label': 'Mese precedente', onclick: () => { miniMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); drawMini(); } }, icon('chevL')),
-            h('button', { class: 'icon-btn sm', 'aria-label': 'Mese successivo', onclick: () => { miniMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1); drawMini(); } }, icon('chevR')))),
-        grid),
+      h('div', { class: 'side-head' },
+        h('span', { class: 'section-title' }, 'Vai a'),
+        h('button', { class: 'icon-btn sm side-close', 'aria-label': 'Chiudi', onclick: () => toggleSide(false) }, icon('close'))),
+      miniCal({ events: allEvents, onPick: pick }),
+      h('div', { class: 'jumps' },
+        jump('Oggi', () => { st.date = today; st.scrollTop = null; if (narrow()) wrap.classList.remove('side-open'); draw(); }),
+        jump('Domani', () => { setView('day'); pick('day', addDays(today, 1)); }),
+        jump('Questa settimana', () => pick('week', startOfWeek(today))),
+        jump('Prossima settimana', () => pick('week', addDays(startOfWeek(today), 7))),
+        jump('Questo mese', () => pick('month', new Date(today.getFullYear(), today.getMonth(), 1))),
+        jump('Mese prossimo', () => pick('month', new Date(today.getFullYear(), today.getMonth() + 1, 1)))),
       h('div', { class: 'legend' }, h('div', { class: 'section-title' }, 'Categorie'),
         cats().map(c => h('div', { class: 'legend-row' }, h('i', { style: { background: c.color || 'var(--cream)' } }), c.name)),
         h('a', { class: 'legend-manage', href: '#/settings' }, cats().length ? 'Gestisci categorie' : '+ Crea una categoria')));
@@ -676,10 +944,45 @@ export async function renderCalendar(host) {
   addEventListener('pfy-flush', onFlush);
   addEventListener('pfy-cats', onCats);
 
+  // Scorciatoie: T = oggi, ← → = periodo precedente/successivo, 1–6 = viste
+  const onKey = e => {
+    if (e.ctrlKey || e.metaKey || e.altKey || st.writing) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    if (document.querySelector('.modal-overlay')) return;
+    const vb = VIEW_BTNS.find(v => v[2] === e.key);
+    if (vb) { setView(vb[0]); draw(); }
+    else if (e.key === 't' || e.key === 'T') { st.date = startOfDay(new Date()); st.scrollTop = null; draw(); }
+    else if (e.key === 'ArrowLeft') step(-1);
+    else if (e.key === 'ArrowRight') step(1);
+    else return;
+    e.preventDefault();
+  };
+  document.addEventListener('keydown', onKey);
+
+  // Scorri con un dito verso sinistra/destra per cambiare periodo
+  let sw = null;
+  const onTouchStart = e => {
+    const t = e.touches[0];
+    sw = e.touches.length === 1 && !st.writing && t.touchType !== 'stylus' ? { x: t.clientX, y: t.clientY, t: Date.now() } : null;
+  };
+  const onTouchEnd = e => {
+    if (!sw) return;
+    const t = e.changedTouches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y, s = sw;
+    sw = null;
+    if (lastDragAt >= s.t || Date.now() - s.t > 700 || Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+    if (document.querySelector('.modal-overlay')) return;
+    step(dx < 0 ? 1 : -1);
+  };
+  main.addEventListener('touchstart', onTouchStart, { passive: true });
+  main.addEventListener('touchend', onTouchEnd, { passive: true });
+
   await loadCats();
   await draw();
   return () => {
     destroyed = true;
+    document.removeEventListener('keydown', onKey);
+    closePicker();
     removeEventListener('pfy-cats', onCats);
     removeEventListener('pfy-remote', onRemote);
     removeEventListener('pfy-flush', onFlush);

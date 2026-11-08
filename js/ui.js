@@ -162,12 +162,15 @@ export function chooseDialog(title, message, options) {
 }
 
 // ---------- Notifiche brevi ----------
-export function toast(msg, { ms = 2800 } = {}) {
+// action: { label, onClick } aggiunge un pulsante (es. "Annulla")
+export function toast(msg, { ms = 2800, action = null } = {}) {
   const root = document.getElementById('toast-root');
-  const t = h('div', { class: 'toast', role: 'status' }, msg);
+  const t = h('div', { class: 'toast' + (action ? ' has-action' : ''), role: 'status' }, msg);
+  const hide = () => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); };
+  if (action) t.append(h('button', { class: 'toast-btn', onclick: () => { hide(); action.onClick(); } }, action.label));
   root.append(t);
   requestAnimationFrame(() => t.classList.add('show'));
-  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, ms);
+  setTimeout(hide, ms);
   return t;
 }
 

@@ -6,11 +6,13 @@ Calendario in stile Microsoft Teams + quaderni per appunti in stile Noteful, con
 ## Cosa c'è dentro
 
 **Calendario (stile Teams)**
-- Viste Giorno, Settimana lavorativa, Settimana, Mese, Agenda + mini-calendario
+- Viste Giorno, Settimana lavorativa, Settimana, Mese, **Anno**, Agenda
+- Mini calendario laterale (si apre anche toccando la data in alto): tocca un giorno, il numero della settimana, il mese o l'anno per andarci subito; scorciatoie "Domani", "Prossima settimana", "Mese prossimo"
+- Scorri con un dito a sinistra/destra per cambiare periodo; da tastiera T = oggi, ← → = avanti/indietro, 1–6 = viste
 - "Nuova riunione" con partecipanti, luogo, link Teams e pulsante **Partecipa**
 - Ricorrenze (giornaliera, feriale, settimanale con giorni a scelta, mensile, annuale, "fino al")
 - Promemoria, categorie a colori, "Mostra come" (Occupato/Libero/Provvisorio/Fuori sede)
-- Trascina gli eventi per spostarli, trascina il bordo in basso per allungarli; trascina sulla griglia per creare
+- Trascina gli eventi per spostarli (mouse e penna subito, col dito tieni premuto un attimo e poi trascina), anche nella vista Mese e per gli eventi ricorrenti, con "Annulla"; trascina il bordo in basso per allungarli; trascina sulla griglia per creare
 - **Scrivi**: penna, evidenziatore, gomma, lazo e testo da tastiera direttamente sopra il calendario
 - Note di ogni riunione a **tastiera** o a **penna**, e pulsante "Prendi appunti" che crea un quaderno collegato
 - Importa/esporta `.ics` (calendario di Teams/Outlook)
