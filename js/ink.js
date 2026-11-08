@@ -23,6 +23,27 @@ export const SIZES = {
 };
 const UNIT = { pen: 'mm', highlighter: 'mm', text: 'pt' };
 const nearest = (list, w) => list.reduce((b, s, i) => (Math.abs(s.w - w) < Math.abs(list[b].w - w) ? i : b), 0);
+// Spessore libero con la barra scorrevole (in mm, a passi di 0,1 mm)
+export const RANGE = { pen: [0.1, 10], highlighter: [1, 20] };
+const toMM = w => Math.round(w / MM * 10) / 10;
+const fromMM = mm => Math.round(mm * MM * 1000) / 1000;
+const clampW = (k, w) => fromMM(Math.min(RANGE[k][1], Math.max(RANGE[k][0], toMM(w))));
+const mmLabel = w => num(toMM(w)) + ' mm';
+const isPreset = (k, w) => SIZES[k].some(s => Math.abs(s.w - w) < 1e-3);
+// Barra scorrevole "Dimensione della penna" con l'anteprima del tratto
+function sizeSlider(k, w, onInput, title = 'Dimensione della penna') {
+  const [lo, hi] = RANGE[k];
+  const val = h('span', { class: 'sz-val' }, mmLabel(w));
+  const dot = h('i', { class: 'sz-dot' + (k === 'highlighter' ? ' hl' : '') });
+  const setDot = mm => { const px = Math.max(2, Math.min(30, mm * 2.4)); dot.style.width = (k === 'highlighter' ? px * 0.55 : px) + 'px'; dot.style.height = px + 'px'; };
+  const inp = h('input', { type: 'range', class: 'sz-range', min: lo, max: hi, step: 0.1, value: toMM(w), 'aria-label': title });
+  setDot(toMM(w));
+  inp.addEventListener('input', () => { const mm = +inp.value; val.textContent = num(mm) + ' mm'; setDot(mm); onInput(fromMM(mm), false); });
+  inp.addEventListener('change', () => onInput(fromMM(+inp.value), true));
+  return h('div', { class: 'sz-slider' },
+    h('div', { class: 'sz-head' }, h('span', {}, title), val),
+    h('div', { class: 'sz-row' }, inp, h('span', { class: 'sz-prev' }, dot)));
+}
 
 // ---------- Tipi di penna ----------
 export const PEN_STYLES = [
@@ -54,8 +75,12 @@ export const tools = {
       if (s.colors) Object.assign(this.colors, s.colors);
       if (s.widths) Object.assign(this.widths, s.widths);
     } catch { /* nessun salvataggio */ }
-    // riporta gli spessori salvati con la vecchia barra alla tappa più vicina
-    for (const k in SIZES) this.widths[k] = SIZES[k][nearest(SIZES[k], this.widths[k])].w;
+    // penna ed evidenziatore: spessore libero (barra scorrevole) entro i limiti; gli altri a tappe fisse
+    for (const k in SIZES) {
+      const w = this.widths[k];
+      if (RANGE[k] && Number.isFinite(w)) this.widths[k] = clampW(k, w);
+      else this.widths[k] = SIZES[k][nearest(SIZES[k], w || 0)].w;
+    }
     document.documentElement.classList.toggle('pen-only', !!this.penOnly);
   },
   set(p) {
@@ -488,18 +513,30 @@ function backPoint(o, fromEnd, L) {
   for (let i = 1; i < seq.length; i++) { acc += dist(seq[i - 1], seq[i]); if (acc >= L) return seq[i]; }
   return seq[seq.length - 1];
 }
+// spessore medio di ogni tipo di penna (per tratteggi e punte delle frecce)
+const STYLE_W = { fountain: 1.05, ball: 1, fine: 0.9, pencil: 1, brush: 1.25 };
 function drawShape(ctx, s, W, H, color, base) {
   const g = s.g, o = outline(g, W, H);
   if (o.length < 2) return;
-  const lw = Math.max(0.6, base);
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = lw; ctx.strokeStyle = color;
-  if (g.dash === 'dash') ctx.setLineDash([lw * 2.5 + 4, lw * 1.8 + 4]);
-  else if (g.dash === 'dot') ctx.setLineDash([0.01, lw * 1.8 + 3]);
-  ctx.beginPath(); ctx.moveTo(o[0][0], o[0][1]);
-  for (let i = 1; i < o.length; i++) ctx.lineTo(o[i][0], o[i][1]);
-  if (g.closed) ctx.closePath();
-  ctx.stroke();
-  ctx.setLineDash([]);
+  const lw = Math.max(0.6, base * (s.t === 'hl' ? 1 : STYLE_W[s.k] || 1));
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = lw; ctx.strokeStyle = ctx.fillStyle = color;
+  const solid = !g.dash || g.dash === 'solid';
+  if (solid && s.t !== 'hl' && s.p.length >= 6) {
+    // linea continua: disegnata come la penna usata (stilografica, matita, pennello…)
+    if (s.k === 'pencil') { ctx.save(); drawPencil(ctx, s, W, H, base, color); ctx.restore(); }
+    // pennello su forme chiuse: senza assottigliare inizio e fine, altrimenti resterebbe un buco
+    else if (g.closed && s.k === 'brush') traceStroke(ctx, s.p, W, H, (i, pr) => Math.max(0.5, base * (0.25 + 1.9 * pr)));
+    else traceStroke(ctx, s.p, W, H, widthFn(s.k, base, s.p.length / 3));
+    ctx.lineWidth = lw;
+  } else {
+    if (g.dash === 'dash') ctx.setLineDash([lw * 2.5 + 4, lw * 1.8 + 4]);
+    else if (g.dash === 'dot') ctx.setLineDash([0.01, lw * 1.8 + 3]);
+    ctx.beginPath(); ctx.moveTo(o[0][0], o[0][1]);
+    for (let i = 1; i < o.length; i++) ctx.lineTo(o[i][0], o[i][1]);
+    if (g.closed) ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   if (!g.closed && g.arrow) {
     const L = Math.max(10, lw * 4);
     const headAt = (tip, from) => {
@@ -514,6 +551,10 @@ function drawShape(ctx, s, W, H, color, base) {
     if (g.arrow & 2) headAt(o[0], backPoint(o, false, L));
   }
 }
+
+// Appunti interni per Taglia / Copia / Incolla (valgono tra pagine, quaderni e calendario)
+let clip = null;
+export const hasClip = () => !!clip;
 
 export class InkSurface {
   static active = null;
@@ -721,6 +762,8 @@ export class InkSurface {
       return;
     }
     if (!this.enabled()) return;
+    this.hidePasteMenu();
+    this._t0 = Date.now();
     if (e.pointerType === 'pen' && !tools.penSeen) {
       tools.set({ penSeen: true, penOnly: true });
       if (!isIPadOS()) toast('Penna rilevata: ora la penna scrive e il dito scorre la pagina.');
@@ -821,6 +864,14 @@ export class InkSurface {
       this.cur = null;
       cancelAnimationFrame(this._lr); this._lr = 0;
       this.clearLive();
+      // tocco veloce con la penna sul contorno di una forma: la seleziona invece di fare un puntino
+      if (s && !s.g && Date.now() - this._t0 < 350) {
+        const b = strokeBB(s);
+        if ((b[2] - b[0]) * this.W < 6 && (b[3] - b[1]) * this.H < 6) {
+          const shape = this.shapeAt(s.p[0] * this.W, s.p[1] * this.H);
+          if (shape) { this.selectShape(shape); return; }
+        }
+      }
       if (s && s.p.length) {
         this.pushUndo(this.snap());
         this.data.strokes.push(s);
@@ -1060,6 +1111,8 @@ export class InkSurface {
       style: { left: Math.min(Math.max((x1 + x2) / 2, 120), this.W - 120) + 'px', top: (above ? y1 - 6 : y2) + 'px', transform: above ? 'translate(-50%,-100%)' : 'translate(-50%,0)' },
     },
       btn('Stile', e => this.openShapeStyle(e.currentTarget)),
+      btn('Taglia', () => this.copyCurrent(true)),
+      btn('Copia', () => this.copyCurrent(false)),
       btn('Duplica', () => this.duplicateShape()),
       this.canRemoveVertex() ? btn('Togli punto', () => {
         const i = this._vSel;
@@ -1111,16 +1164,23 @@ export class InkSurface {
       custom.addEventListener('change', () => { const v = custom.value; this.editShape(q => { q.c = hl || !dark ? v : inkColorFromDark(v); }); render(); });
       const line = d => h('span', { class: 'ss-line', html: `<svg viewBox="0 0 40 12" width="40" height="12"><line x1="4" y1="6" x2="36" y2="6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" ${d === 'dash' ? 'stroke-dasharray="7 5"' : d === 'dot' ? 'stroke-dasharray="0.1 5"' : ''}/></svg>` });
       const opt = (active, content, fn, title) => h('button', { class: 'ss-opt' + (active ? ' active' : ''), type: 'button', title, 'aria-label': title, onclick: () => { fn(); render(); } }, content);
-      const sizes = SIZES[key];
+      // la barra scorrevole aggiorna la forma dal vivo; l'annulla si registra una volta sola
+      let before = null;
+      const slider = sizeSlider(key, s.w, (w, done) => {
+        if (!before) before = this.snap();
+        s.w = w; this.renderStrokes(); this.drawShapeSel();
+        if (done) { this.pushUndo(before); before = null; this.emit(); }
+      }, hl ? "Dimensione dell'evidenziatore" : 'Dimensione della penna');
       const kids = [
         h('div', { class: 'ss-title' }, 'Stile del tratto'),
         h('div', { class: 'ss-label' }, 'Colore'),
         h('div', { class: 'ss-row' }, colors.map(sw), custom),
         h('div', { class: 'ss-label' }, 'Linea'),
         h('div', { class: 'ss-row' }, [['solid', 'Continua'], ['dash', 'Tratteggiata'], ['dot', 'Puntinata']].map(([d, t]) => opt((g.dash || 'solid') === d, line(d), () => this.editShape(q => { q.g.dash = d; }), t))),
-        h('div', { class: 'ss-label' }, 'Spessore'),
-        h('div', { class: 'ss-row' }, sizes.map(z => opt(Math.abs(s.w - z.w) < 1e-6, h('span', {}, z.label + (UNIT[key] ? ' ' + UNIT[key] : '')), () => this.editShape(q => { q.w = z.w; }), z.label))),
-      ];
+        hl ? null : h('div', { class: 'ss-label' }, 'Tipo di penna'),
+        hl ? null : h('div', { class: 'ss-row' }, PEN_STYLES.map(([id, label]) => opt((s.k || 'ball') === id, icon('pen_' + id), () => this.editShape(q => { q.k = id; }), label))),
+        slider,
+      ].filter(Boolean);
       if (!g.closed) {
         kids.push(h('div', { class: 'ss-label' }, 'Frecce'),
           h('div', { class: 'ss-row' }, [[0, '—', 'Nessuna'], [1, '→', 'Alla fine'], [2, '←', "All'inizio"], [3, '↔', 'Entrambe']].map(([a, l, t]) => opt((g.arrow || 0) === a, h('span', { class: 'ss-arrow' }, l), () => this.editShape(q => { q.g.arrow = a; }), t))));
@@ -1129,17 +1189,22 @@ export class InkSurface {
     };
     render();
     pop.addEventListener('pointerdown', e => e.stopPropagation());
-    this.el.append(pop);
-    // sotto (o sopra) il menu, dentro la pagina
-    // sotto la forma se c'è spazio, altrimenti sopra: così la forma resta visibile mentre la si modifica
-    const bb = strokeBB(s), pw = pop.offsetWidth, ph = pop.offsetHeight;
-    const cx = (bb[0] + bb[2]) / 2 * this.W, top = bb[1] * this.H, bottom = bb[3] * this.H;
-    const menuDown = this._smenu && !this._smenu.style.transform.includes('-100%') ? this._smenu.offsetHeight + 14 : 0;
-    let y = bottom + 16 + menuDown;
-    if (y + ph > this.H - 8) y = top - 58 - ph;
-    if (y < 8) y = Math.max(8, this.H - ph - 8);
-    pop.style.left = Math.min(Math.max(8, cx - pw / 2), this.W - pw - 8) + 'px';
-    pop.style.top = y + 'px';
+    document.body.append(pop);
+    // posizione sullo schermo: sotto la forma (e il menu), altrimenti sopra, altrimenti di lato; la forma resta visibile
+    const er = this.el.getBoundingClientRect(), sx = er.width / this.W || 1, sy = er.height / this.H || 1;
+    const bb = strokeBB(s), pw = pop.offsetWidth, ph = pop.offsetHeight, vw = innerWidth, vh = innerHeight;
+    const L = er.left + bb[0] * this.W * sx, R = er.left + bb[2] * this.W * sx, T = er.top + bb[1] * this.H * sy, B = er.top + bb[3] * this.H * sy;
+    const mr = this._smenu ? this._smenu.getBoundingClientRect() : null;
+    const below = Math.max(B, mr && mr.top >= B - 2 ? mr.bottom : B) + 10, above = Math.min(T, mr && mr.bottom <= T + 2 ? mr.top : T) - 10 - ph;
+    let x = (L + R) / 2 - pw / 2, y;
+    if (below + ph <= vh - 8) y = below;
+    else if (above >= 8) y = above;
+    else {
+      y = Math.min(Math.max(8, (T + B) / 2 - ph / 2), vh - ph - 8);
+      x = R + 12 + pw <= vw - 8 ? R + 12 : L - 12 - pw;
+    }
+    pop.style.left = Math.min(Math.max(8, x), vw - pw - 8) + 'px';
+    pop.style.top = Math.max(8, y) + 'px';
     this._spop = pop;
     this._spopOff = e => { if (!pop.contains(e.target) && !(this._smenu && this._smenu.contains(e.target))) { pop.remove(); document.removeEventListener('pointerdown', this._spopOff, true); this._spop = null; } };
     setTimeout(() => document.addEventListener('pointerdown', this._spopOff, true));
@@ -1270,15 +1335,20 @@ export class InkSurface {
     const L = this.lasso; this.lasso = null; this.clearLive();
     if (!L) return;
     const W = this.W, H = this.H;
-    // un tocco (senza disegnare il lazo) su un testo o un'immagine li seleziona
-    if (L.length < 8) {
+    // un tocco (senza disegnare il lazo) su una forma, un testo o un'immagine li seleziona.
+    // Con la penna un tocco ha sempre qualche piccolo movimento: conta quanto è grande il giro, non quanti punti ha.
+    let lx1 = Infinity, ly1 = Infinity, lx2 = -Infinity, ly2 = -Infinity;
+    for (let i = 0; i < L.length; i += 2) { lx1 = Math.min(lx1, L[i]); lx2 = Math.max(lx2, L[i]); ly1 = Math.min(ly1, L[i + 1]); ly2 = Math.max(ly2, L[i + 1]); }
+    if (L.length < 8 || (lx2 - lx1 < 14 && ly2 - ly1 < 14)) {
+      const tx = L[0], ty = L[1];
       // tocco su una forma: si apre la modifica con le maniglie
-      const shape = [...this.data.strokes].reverse().find(s => s.g && this.hitStroke(s, L[0], L[1], 12 + s.w * W / 2000));
+      const shape = this.shapeAt(tx, ty);
       if (shape) { this.selectShape(shape); return; }
-      const x = L[0] / W, y = L[1] / H, pad = 6 / W;
+      const x = tx / W, y = ty / H, pad = 6 / W;
       const t = [...this.data.texts].reverse().find(q => { const b = this.textBounds(q); return x >= b.x1 - pad && x <= b.x2 + pad && y >= b.y1 && y <= b.y2; });
       const im = !t && [...this.data.images].reverse().find(q => x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h);
-      if (!t && !im) return;
+      // tocco su un punto vuoto con qualcosa di copiato: propone "Incolla"
+      if (!t && !im) { if (clip) this.showPasteMenu(tx, ty); return; }
       this.sel = { strokes: [], texts: t ? [t] : [], images: im ? [im] : [] };
       this.drawSel(); this.showSelMenu();
       return;
@@ -1295,10 +1365,63 @@ export class InkSurface {
     });
     const images = this.data.images.filter(im => pointInPoly((im.x + im.w / 2) * W, (im.y + im.h / 2) * H, L));
     if (!strokes.length && !texts.length && !images.length) return;
+    // lazo attorno a una sola forma: si apre direttamente la modifica della forma
+    if (strokes.length === 1 && strokes[0].g && !texts.length && !images.length) { this.selectShape(strokes[0]); return; }
     this.sel = { strokes, texts, images };
     this.drawSel();
     this.showSelMenu();
   }
+  // forma il cui contorno passa vicino al punto (pixel)
+  shapeAt(px, py) {
+    return [...this.data.strokes].reverse().find(s => s.g && this.hitStroke(s, px, py, 14 + s.w * this.W / 2000)) || null;
+  }
+
+  // ---------- Taglia / Copia / Incolla ----------
+  // Copia la forma selezionata o la selezione del lazo
+  copyCurrent(cut = false) {
+    const items = this.shapeSel ? { strokes: [this.shapeSel], texts: [], images: [] } : this.sel;
+    if (!items) return false;
+    clip = JSON.parse(JSON.stringify({ strokes: items.strokes, texts: items.texts, images: items.images }));
+    if (cut) { if (this.shapeSel) this.deleteShape(); else this.deleteSel(); }
+    toast(cut ? 'Tagliato: tocca un punto vuoto col lazo per incollare' : 'Copiato: tocca un punto vuoto col lazo per incollare', { ms: 2600 });
+    return true;
+  }
+  // Incolla; con un punto (pixel) il contenuto viene centrato lì
+  paste(px, py) {
+    if (!clip) return false;
+    const c = JSON.parse(JSON.stringify(clip)), W = this.W, H = this.H;
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    const grow = (a, b, c2, d) => { x1 = Math.min(x1, a); y1 = Math.min(y1, b); x2 = Math.max(x2, c2); y2 = Math.max(y2, d); };
+    for (const s of c.strokes) { const b = strokeBB(s); grow(b[0], b[1], b[2], b[3]); }
+    for (const t of c.texts) grow(t.x, t.y, t.x + t.w, t.y + 0.02);
+    for (const im of c.images) grow(im.x, im.y, im.x + im.w, im.y + im.h);
+    if (!Number.isFinite(x1)) return false;
+    let dx = 0.025, dy = 0.025 * W / H;
+    if (px != null) { dx = px / W - (x1 + x2) / 2; dy = py / H - (y1 + y2) / 2; }
+    for (const s of c.strokes) {
+      s.id = sid();
+      s.p = s.p.map((v, i) => i % 3 === 0 ? R5(v + dx) : i % 3 === 1 ? R5(v + dy) : v);
+      if (s.g) s.g.pts = s.g.pts.map((v, i) => R5(v + (i % 2 ? dy : dx)));
+    }
+    for (const t of c.texts) { t.id = uid(); t.x = R5(t.x + dx); t.y = R5(t.y + dy); }
+    for (const im of c.images) { im.id = uid(); im.x = R5(im.x + dx); im.y = R5(im.y + dy); }
+    this.pushUndo(this.snap());
+    this.data.strokes.push(...c.strokes); this.data.texts.push(...c.texts); this.data.images.push(...c.images);
+    this.rebuildObjects(); this.renderStrokes(); this.emit();
+    InkSurface.active = this;
+    if (c.strokes.length === 1 && c.strokes[0].g && !c.texts.length && !c.images.length) this.selectShape(c.strokes[0]);
+    else { this.clearShapeSel(); this.sel = c; this.drawSel(); this.showSelMenu(); }
+    return true;
+  }
+  showPasteMenu(px, py) {
+    this.hidePasteMenu();
+    const m = h('div', { class: 'ink-selmenu shape-menu', style: { left: Math.min(Math.max(px, 50), this.W - 50) + 'px', top: Math.max(8, py - 10) + 'px', transform: 'translate(-50%,-100%)' } },
+      h('button', { class: 'sm-btn', type: 'button', onclick: e => { e.stopPropagation(); this.hidePasteMenu(); this.paste(px, py); } }, 'Incolla'));
+    m.addEventListener('pointerdown', e => e.stopPropagation());
+    this.el.append(m);
+    this._pmenu = m;
+  }
+  hidePasteMenu() { if (this._pmenu) { this._pmenu.remove(); this._pmenu = null; } }
   selBox() {
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     for (const s of this.sel.strokes) {
@@ -1334,14 +1457,16 @@ export class InkSurface {
     if (!this.sel) return;
     const b = this.selBoxPx();
     const above = b.y1 > 52;
-    const btn = (label, ic, fn) => h('button', { class: 'icon-btn', title: label, 'aria-label': label, onclick: e => { e.stopPropagation(); fn(); } }, icon(ic));
+    const btn = (label, fn, cls = '', title = label) => h('button', { class: 'sm-btn' + cls, type: 'button', title, onclick: e => { e.stopPropagation(); fn(); } }, label);
     const menu = h('div', {
-      class: 'ink-selmenu',
-      style: { left: Math.min(Math.max((b.x1 + b.x2) / 2, 70), this.W - 70) + 'px', top: (above ? b.y1 - 8 : b.y2 + 8) + 'px', transform: above ? 'translate(-50%,-100%)' : 'translate(-50%,0)' },
+      class: 'ink-selmenu shape-menu',
+      style: { left: Math.min(Math.max((b.x1 + b.x2) / 2, 150), this.W - 150) + 'px', top: (above ? b.y1 - 8 : b.y2 + 8) + 'px', transform: above ? 'translate(-50%,-100%)' : 'translate(-50%,0)' },
     },
-      btn('Applica il colore attuale', 'palette', () => this.recolorSel()),
-      btn('Duplica', 'copy', () => this.duplicateSel()),
-      btn('Elimina', 'trash', () => this.deleteSel()));
+      btn('Taglia', () => this.copyCurrent(true)),
+      btn('Copia', () => this.copyCurrent(false)),
+      btn('Duplica', () => this.duplicateSel()),
+      btn('Colore', () => this.recolorSel(), '', 'Applica il colore attuale'),
+      btn('Elimina', () => this.deleteSel(), ' danger'));
     menu.addEventListener('pointerdown', e => e.stopPropagation());
     this.el.append(menu);
     this._menu = menu;
@@ -1567,6 +1692,7 @@ export class InkSurface {
     if (InkSurface.active === this) InkSurface.active = null;
     clearTimeout(this._ht);
     this.clearShapeSel();
+    this.hidePasteMenu();
   }
 }
 
@@ -1617,7 +1743,9 @@ export function inkToolbar({ compact = false, lasso = true, text = true, hand = 
     return g;
   }
   function sizeGroup(t) {
-    const list = SIZES[t], cur = nearest(list, tools.widths[t]), unit = UNIT[t];
+    const list = SIZES[t], unit = UNIT[t];
+    const free = !!RANGE[t], custom = free && !isPreset(t, tools.widths[t]);
+    const cur = custom ? -1 : nearest(list, tools.widths[t]);
     const g = h('div', { class: 'tb-group tb-sizes' + (t === 'eraser' ? ' eraser' : '') });
     list.forEach((s, i) => {
       const d = t === 'eraser' ? 6 + i * 5 : Math.round(3 + i * (11 / Math.max(1, list.length - 1)));
@@ -1628,7 +1756,32 @@ export function inkToolbar({ compact = false, lasso = true, text = true, hand = 
       }, t === 'text' ? null : h('i', { style: { width: d + 'px', height: d + 'px' } }), h('span', {}, s.label)));
     });
     if (unit) g.append(h('span', { class: 'tb-unit' }, unit));
+    // "…": spessore a scelta con la barra scorrevole (es. 5,7 mm)
+    if (free) {
+      const more = h('button', {
+        class: 'size-btn more' + (custom ? ' active' : ''), type: 'button', title: 'Scegli lo spessore in mm', 'aria-label': 'Scegli lo spessore in mm',
+        onclick: () => openSizePop(more, t),
+      }, custom ? h('span', {}, num(toMM(tools.widths[t]))) : icon('more'));
+      g.append(more);
+    }
     return g;
+  }
+  let sizePop = null;
+  function closeSizePop() { if (sizePop) { sizePop.el.remove(); document.removeEventListener('pointerdown', sizePop.off, true); sizePop = null; } }
+  function openSizePop(anchor, t) {
+    if (sizePop) { closeSizePop(); return; }
+    const el = h('div', { class: 'size-pop' }, sizeSlider(t, tools.widths[t], (w, done) => {
+      // durante il trascinamento aggiorna solo lo spessore, senza ridisegnare la barra
+      tools.widths[t] = w;
+      if (done) { const keep = sizePop; sizePop = null; tools.set({ widths: { ...tools.widths, [t]: w } }); sizePop = keep; }
+    }, t === 'highlighter' ? "Dimensione dell'evidenziatore" : 'Dimensione della penna'));
+    document.body.append(el);
+    const r = anchor.getBoundingClientRect();
+    el.style.left = Math.max(8, Math.min(r.left + r.width / 2 - el.offsetWidth / 2, innerWidth - el.offsetWidth - 8)) + 'px';
+    el.style.top = Math.min(r.bottom + 8, innerHeight - el.offsetHeight - 8) + 'px';
+    const off = e => { if (!el.contains(e.target) && !anchor.contains(e.target)) closeSizePop(); };
+    setTimeout(() => document.addEventListener('pointerdown', off, true));
+    sizePop = { el, off };
   }
   function eraserModeGroup() {
     const g = h('div', { class: 'tb-group tb-mode' });
@@ -1658,7 +1811,7 @@ export function inkToolbar({ compact = false, lasso = true, text = true, hand = 
     if (penOnlyBtn) penOnlyBtn.classList.toggle('active', !!tools.penOnly);
   }
   const offTools = tools.on(sync), offTheme = onTheme(sync);
-  bar.destroy = () => { offTools(); offTheme(); };
+  bar.destroy = () => { offTools(); offTheme(); closeSizePop(); };
   sync();
   return bar;
 }

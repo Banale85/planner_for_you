@@ -818,9 +818,12 @@ export async function renderNotebook(host, { id }) {
     const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase(), s = curSurface();
     if (mod && k === 'z') { e.preventDefault(); if (s) (e.shiftKey ? s.redo() : s.undo()); }
     else if (mod && k === 'y') { e.preventDefault(); if (s) s.redo(); }
+    else if (mod && (k === 'c' || k === 'x')) { if (s && s.copyCurrent(k === 'x')) e.preventDefault(); }
+    else if (mod && k === 'v') { if (s && s.paste()) e.preventDefault(); }
     else if (!mod && !e.altKey) {
       const map = { p: 'pen', h: 'highlighter', e: 'eraser', l: 'lasso', t: 'text', m: 'hand' };
       if (map[k]) tools.set({ tool: map[k] });
+      else if ((e.key === 'Delete' || e.key === 'Backspace') && s && s.shapeSel) { e.preventDefault(); s.deleteShape(); }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && s && s.sel) { e.preventDefault(); s.deleteSel(); }
     }
   };

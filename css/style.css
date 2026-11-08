@@ -289,7 +289,7 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; white-space:
 .sm-btn.danger { color: var(--danger); }
 .sm-btn.done { color: var(--brand); font-weight: 600; }
 .shape-style {
-  position: absolute; z-index: 8; width: min(320px, calc(100% - 16px)); background: var(--surface); color: var(--text);
+  position: fixed; z-index: 210; width: min(320px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 12px 14px 14px;
 }
 .ss-title { font-weight: 700; text-align: center; margin-bottom: 6px; }
@@ -301,6 +301,19 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; white-space:
 .ss-opt.active { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); background: var(--brand-soft); }
 .ss-line { display: inline-flex; }
 .ss-arrow { font-size: 18px; line-height: 1; }
+.shape-menu { max-width: calc(100% - 12px); overflow-x: auto; scrollbar-width: none; }
+/* Barra scorrevole dello spessore */
+.size-pop { position: fixed; z-index: 210; width: 300px; max-width: calc(100vw - 16px); background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 14px 16px; }
+.sz-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; color: var(--text2); margin-bottom: 8px; }
+.sz-val { font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600; }
+.sz-row { display: flex; align-items: center; gap: 12px; }
+.sz-range { flex: 1; accent-color: var(--brand); height: 28px; }
+.sz-prev { width: 34px; height: 34px; display: grid; place-items: center; flex: none; }
+.sz-dot { display: block; border-radius: 50%; background: var(--text); }
+.sz-dot.hl { border-radius: 3px; background: #f5d33a; }
+.shape-style .sz-slider { margin-top: 12px; }
+.size-btn.more { min-width: 34px; }
+.size-btn.more .icon { width: 16px; height: 16px; }
 
 /* ===================== Calendario ===================== */
 .cal { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
