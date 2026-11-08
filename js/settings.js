@@ -29,7 +29,8 @@ function driveCard() {
           h('p', { class: 'muted' }, 'Accedi con il tuo account Google: l\'app creerà nel tuo Drive la cartella "Planner for You" e potrà vedere solo quella. Fallo su ogni dispositivo con lo stesso account.'),
           h('div', { class: 'row' },
             h('button', { class: 'btn primary', onclick: () => { try { sync.startAuth('select_account consent', true); } catch (e) { toast(e.message); } } }, icon('cloud'), 'Collega Google Drive'),
-            h('button', { class: 'btn ghost', onclick: () => { sync.setClientId(''); draw(); } }, 'Cambia Client ID')), err);
+            // con l'ID già in config.js non serve (e non si può) cambiarlo da qui
+            sync.builtInClientId() ? null : h('button', { class: 'btn ghost', onclick: () => { sync.setClientId(''); draw(); } }, 'Cambia Client ID')), err);
       }
       return;
     }

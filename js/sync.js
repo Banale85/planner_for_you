@@ -20,7 +20,10 @@ const ls = {
   set(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } },
 };
 
-export const clientId = () => ((ls.get('pfy-client-id', '') || GOOGLE_CLIENT_ID || '') + '').trim();
+// Il Client ID di js/config.js ha la precedenza: quello incollato a mano in Impostazioni serve solo
+// se config.js è vuoto (così un ID vecchio o sbagliato salvato su un dispositivo non dà errore 401).
+export const builtInClientId = () => !!String(GOOGLE_CLIENT_ID || '').trim();
+export const clientId = () => ((GOOGLE_CLIENT_ID || ls.get('pfy-client-id', '') || '') + '').trim();
 export const setClientId = v => ls.set('pfy-client-id', v ? v.trim() : null);
 export const isEnabled = () => !!(cfg && cfg.enabled);
 export const account = () => (cfg && cfg.email) || '';
